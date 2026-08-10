@@ -29,6 +29,13 @@ var KEY = null;
 
 var DEFAULTS = { done:{}, xp:0, streak:0, last:null, missed:[], trophies:[] };
 
+/* Version del esquema del progreso.
+   REGLA QUE NO SE ROMPE: la clave de localStorage NO cambia nunca.
+   Si el esquema evoluciona, se sube SCHEMA y se anade un paso en
+   migrate(), que solo puede anadir campos o corregirlos. Nunca borrar.
+   Cambiar la clave equivaldria a borrarle el progreso a todo el mundo. */
+var SCHEMA = 2;
+
 var storageOK = (function () {
   try {
     var probe = '__lt_probe__';
@@ -46,13 +53,118 @@ var warnedStorage = false;
 function normalizeState(raw) {
   var s = {};
   raw = (raw && typeof raw === 'object') ? raw : {};
+  s.v       = typeof raw.v === 'number' ? raw.v : 1;
   s.done    = (raw.done && typeof raw.done === 'object') ? raw.done : {};
   s.xp      = typeof raw.xp === 'number' && isFinite(raw.xp) ? raw.xp : 0;
   s.streak  = typeof raw.streak === 'number' && isFinite(raw.streak) ? raw.streak : 0;
   s.last    = typeof raw.last === 'string' ? raw.last : null;
   s.missed  = Object.prototype.toString.call(raw.missed) === '[object Array]' ? raw.missed : [];
   s.trophies = Object.prototype.toString.call(raw.trophies) === '[object Array]' ? raw.trophies : [];
+  return migrate(s);
+}
+
+/* Sube un progreso viejo al esquema actual sin perder nada.
+   Cada paso solo anade o corrige; ninguno borra. */
+function migrate(s) {
+  if (s.v < 2) {
+    /* v1 no guardaba la version ni el recuento de pasos por dia.
+       No hay nada que convertir: solo se sella. */
+    s.v = 2;
+  }
+  /* futuros pasos: if (s.v < 3) { ...; s.v = 3; } */
+  s.v = SCHEMA;
   return s;
+}
+
+/* ---------- copia de seguridad ---------- */
+
+/* Une dos progresos quedandose con lo mejor de cada uno.
+   Sirve para restaurar una copia sin machacar lo que ya hay,
+   y para juntar el progreso del movil con el del ordenador. */
+function mergeState(a, b) {
+  a = normalizeState(a);
+  b = normalizeState(b);
+  var out = normalizeState(null);
+
+  var dias = {}, k;
+  for (k in a.done) if (a.done.hasOwnProperty(k)) dias[k] = 1;
+  for (k in b.done) if (b.done.hasOwnProperty(k)) dias[k] = 1;
+  for (k in dias) {
+    var da = a.done[k], db = b.done[k];
+    if (!da) { out.done[k] = db; continue; }
+    if (!db) { out.done[k] = da; continue; }
+    out.done[k] = {
+      score: Math.max(da.score || 0, db.score || 0),
+      xp: Math.max(da.xp || 0, db.xp || 0),
+      date: (da.date || '') > (db.date || '') ? da.date : db.date
+    };
+  }
+
+  /* el XP no se suma: duplicaria lo ganado en los dias comunes */
+  out.xp = Math.max(a.xp, b.xp);
+  out.streak = Math.max(a.streak, b.streak);
+  out.last = (a.last || '') > (b.last || '') ? a.last : b.last;
+
+  var vistos = {};
+  out.missed = [];
+  [].concat(b.missed, a.missed).forEach(function (m) {
+    if (!m || !m.id || vistos[m.id]) return;
+    vistos[m.id] = 1;
+    out.missed.push(m);
+  });
+  if (out.missed.length > MISSED_CAP) out.missed = out.missed.slice(0, MISSED_CAP);
+
+  out.trophies = [];
+  [].concat(a.trophies, b.trophies).forEach(function (t) {
+    if (out.trophies.indexOf(t) === -1) out.trophies.push(t);
+  });
+
+  return out;
+}
+
+function exportProgress() {
+  var user = Auth.current();
+  var payload = {
+    app: 'la-trampa',
+    schema: SCHEMA,
+    user: user ? user.id : null,
+    exported: todayISO(),
+    progress: S
+  };
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'la-trampa-' + (user ? user.id : 'progreso') + '-' + todayISO() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function () { URL.revokeObjectURL(a.href); a.parentNode.removeChild(a); }, 1000);
+}
+
+function importProgress(file, done) {
+  var reader = new FileReader();
+  reader.onload = function () {
+    var data;
+    try { data = JSON.parse(reader.result); }
+    catch (e) { done('El archivo no es una copia válida de La Trampa.'); return; }
+
+    var prog = data && (data.progress || data);
+    if (!prog || typeof prog !== 'object' || !prog.done) {
+      done('El archivo no contiene ningún progreso reconocible.');
+      return;
+    }
+
+    var antes = doneCount();
+    S = mergeState(S, prog);
+    commit();
+    var despues = doneCount();
+    done(null, {
+      dias: despues,
+      nuevos: despues - antes,
+      de: data.user || 'otra cuenta'
+    });
+  };
+  reader.onerror = function () { done('No se pudo leer el archivo.'); };
+  reader.readAsText(file);
 }
 
 function loadState() {
@@ -105,6 +217,9 @@ function openSession(user) {
   memory = null;
   adoptLegacyProgress();
   S = loadState();
+  /* loadState ya ha migrado en memoria; esto deja la migración
+     escrita, para no repetirla en cada arranque */
+  saveState(S);
   paintSession();
   paintStats();
 }
@@ -389,6 +504,22 @@ function paintSession() {
   if (stats) stats.hidden = !user;
   if (box) box.hidden = !user;
   if (who) who.textContent = user ? user.name : '';
+
+  var snd = document.getElementById('session-sound');
+  if (snd) {
+    var pinta = function () {
+      snd.textContent = Sound.on ? '♪' : '✕';
+      snd.className = 'session__sound' + (Sound.on ? '' : ' is-off');
+      snd.setAttribute('aria-pressed', Sound.on ? 'true' : 'false');
+      snd.title = Sound.on ? 'Sonido activado' : 'Sonido desactivado';
+      snd.setAttribute('aria-label', snd.title);
+    };
+    if (!snd.__wired) {
+      snd.__wired = true;
+      snd.addEventListener('click', function () { Sound.toggle(); pinta(); });
+    }
+    pinta();
+  }
   if (out && !out.__wired) {
     out.__wired = true;
     out.addEventListener('click', function () {
@@ -406,7 +537,9 @@ function paintStats() {
   var xp = document.getElementById('stat-xp');
   var st = document.getElementById('stat-streak');
   var dn = document.getElementById('stat-done');
-  if (xp) xp.textContent = S.xp;
+  /* durante una lección el contador sube en vivo, para que el +10
+     que vuela hacia él aterrice en un número que de verdad cambia */
+  if (xp) xp.textContent = S.xp + ((run && run.xp) ? run.xp : 0);
   if (st) {
     st.textContent = S.streak;
     st.parentNode.className = 'stat' + (S.streak > 0 ? ' stat--fire' : '');
@@ -466,6 +599,74 @@ function trapPanel(opts) {
   }
 
   return wrap;
+}
+
+/* =========================================================
+   6b. Reacción inmediata
+   XP que vuela hacia el contador, latido y sonido corto.
+   El sonido se genera con osciladores: ni un archivo de audio.
+   ========================================================= */
+
+var SOUND_KEY = 'latrampa.sound';
+
+var Sound = {
+  on: (function () { try { return window.localStorage.getItem(SOUND_KEY) !== 'off'; } catch (e) { return true; } })(),
+  ac: null,
+
+  toggle: function () {
+    Sound.on = !Sound.on;
+    try { window.localStorage.setItem(SOUND_KEY, Sound.on ? 'on' : 'off'); } catch (e) {}
+    if (Sound.on) Sound.play(true);
+    return Sound.on;
+  },
+
+  play: function (ok) {
+    if (!Sound.on) return;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!Sound.ac) Sound.ac = new AC();
+      var c = Sound.ac;
+      if (c.state === 'suspended') c.resume();
+      var t0 = c.currentTime;
+      /* acierto: dos notas que suben. fallo: dos que bajan, más graves */
+      var notas = ok ? [659.25, 987.77] : [233.08, 174.61];
+      notas.forEach(function (f, i) {
+        var t = t0 + i * 0.075;
+        var o = c.createOscillator(), g = c.createGain();
+        o.type = ok ? 'sine' : 'triangle';
+        o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(ok ? 0.07 : 0.05, t + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.17);
+        o.connect(g); g.connect(c.destination);
+        o.start(t); o.stop(t + 0.19);
+      });
+    } catch (e) {}
+  }
+};
+
+function feedback(ok, xp) {
+  Sound.play(ok);
+
+  var stat = document.getElementById('stat-xp');
+  var fly = el('div', 'xpfly' + (ok ? '' : ' xpfly--low'), '+' + xp);
+  if (stat) {
+    var r = stat.getBoundingClientRect();
+    fly.style.left = (r.left + r.width / 2) + 'px';
+    fly.style.top = (r.bottom + 2) + 'px';
+  } else {
+    fly.style.left = '50%';
+    fly.style.top = '4.5rem';
+  }
+  document.body.appendChild(fly);
+  setTimeout(function () { if (fly.parentNode) fly.parentNode.removeChild(fly); }, 1200);
+
+  if (stat) {
+    stat.classList.remove('is-bump');
+    void stat.offsetWidth;          /* reinicia la animación */
+    stat.classList.add('is-bump');
+  }
 }
 
 /* =========================================================
@@ -1061,6 +1262,373 @@ RENDER.listening = function (ex, ctx) {
   return wrap;
 };
 
+/* ---- order: montar la frase palabra a palabra ---- */
+/* El ejercicio que ataca de frente el calco de orden: te damos las
+   piezas y tienes que colocarlas como las colocaría un inglés. */
+RENDER.order = function (ex, ctx) {
+  var wrap = el('div');
+  var correcta = (ex.words || []).slice(0);
+
+  wrap.appendChild(el('p', 'instruction', ex.instruction || 'Monta la frase en inglés'));
+  if (ex.es) wrap.appendChild(el('p', 'prompt-es', ex.es));
+
+  var linea = el('div', 'order__line');
+  linea.setAttribute('aria-label', 'Tu frase');
+  var vacio = el('span', 'order__empty', 'Pulsa las palabras en el orden correcto');
+  linea.appendChild(vacio);
+
+  var banco = el('div', 'order__bank');
+  wrap.appendChild(linea);
+  wrap.appendChild(banco);
+
+  var after = el('div');
+  var row = el('div', 'btn-row');
+  var check = button('Comprobar', 'btn--primary', submit);
+  check.disabled = true;
+  var deshacer = button('Deshacer', 'btn--ghost btn--sm', function () {
+    var ult = linea.querySelectorAll('.chip');
+    if (ult.length) devolver(ult[ult.length - 1]);
+  });
+  row.appendChild(check);
+  row.appendChild(deshacer);
+  wrap.appendChild(row);
+  wrap.appendChild(after);
+
+  var respondido = false;
+
+  /* barajar asegurando que no salga ya ordenada */
+  function barajar(arr) {
+    var out = arr.slice(0), i, j, t;
+    for (var intento = 0; intento < 12; intento++) {
+      for (i = out.length - 1; i > 0; i--) {
+        j = Math.floor(Math.random() * (i + 1));
+        t = out[i]; out[i] = out[j]; out[j] = t;
+      }
+      if (out.join(' ') !== arr.join(' ')) break;
+    }
+    return out;
+  }
+
+  function chip(texto, enBanco) {
+    var b = el('button', 'chip');
+    b.type = 'button';
+    b.textContent = texto;
+    b.setAttribute('draggable', 'true');
+    b.addEventListener('click', function () {
+      if (respondido) return;
+      if (b.parentNode === banco) colocar(b); else devolver(b);
+    });
+    /* arrastrar para reordenar dentro de la línea (escritorio) */
+    b.addEventListener('dragstart', function (e) {
+      if (respondido) { e.preventDefault(); return; }
+      arrastrando = b;
+      b.classList.add('is-drag');
+      try { e.dataTransfer.setData('text/plain', texto); e.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+    });
+    b.addEventListener('dragend', function () { b.classList.remove('is-drag'); arrastrando = null; });
+    return b;
+  }
+
+  var arrastrando = null;
+
+  function zonaSoltar(zona) {
+    zona.addEventListener('dragover', function (e) {
+      if (!arrastrando || respondido) return;
+      e.preventDefault();
+      var tras = despuesDe(zona, e.clientX, e.clientY);
+      if (tras == null) zona.appendChild(arrastrando);
+      else zona.insertBefore(arrastrando, tras);
+    });
+    zona.addEventListener('drop', function (e) { if (arrastrando) { e.preventDefault(); pintar(); } });
+  }
+
+  function despuesDe(zona, x, y) {
+    var chips = [].slice.call(zona.querySelectorAll('.chip:not(.is-drag)'));
+    for (var i = 0; i < chips.length; i++) {
+      var r = chips[i].getBoundingClientRect();
+      if (y < r.bottom - r.height / 2 && x < r.left + r.width / 2) return chips[i];
+    }
+    return null;
+  }
+
+  zonaSoltar(linea);
+  zonaSoltar(banco);
+
+  function colocar(b) { linea.appendChild(b); pintar(); }
+  function devolver(b) { banco.appendChild(b); pintar(); }
+
+  function pintar() {
+    var enLinea = linea.querySelectorAll('.chip').length;
+    vacio.style.display = enLinea ? 'none' : '';
+    if (!linea.contains(vacio)) linea.insertBefore(vacio, linea.firstChild);
+    check.disabled = respondido || banco.querySelectorAll('.chip').length > 0;
+  }
+
+  barajar(correcta).forEach(function (w) { banco.appendChild(chip(w, true)); });
+  pintar();
+
+  function leerLinea() {
+    return [].map.call(linea.querySelectorAll('.chip'), function (c) { return c.textContent; }).join(' ');
+  }
+
+  function submit() {
+    if (respondido) return;
+    var mia = leerLinea();
+    if (!norm(mia)) return;
+    respondido = true;
+
+    var ok = norm(mia) === norm(correcta.join(' '));
+    check.disabled = true;
+    row.innerHTML = '';
+
+    /* marcar palabra a palabra en qué posición fallaste */
+    [].forEach.call(linea.querySelectorAll('.chip'), function (c, i) {
+      c.classList.add(norm(c.textContent) === norm(correcta[i] || '') ? 'chip--ok' : 'chip--bad');
+      c.setAttribute('draggable', 'false');
+    });
+
+    after.appendChild(trapPanel({
+      trap: ok ? null : (ex.trap || mia),
+      ok: correcta.join(' '),
+      okLabel: ok ? 'Exacto' : 'El orden correcto',
+      why: ex.why
+    }));
+
+    var row2 = el('div', 'btn-row');
+    var next = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+    row2.appendChild(next);
+    after.appendChild(row2);
+    next.focus();
+
+    ctx.score(ok, ex);
+    ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+  }
+
+  ctx.keys = function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); if (respondido) ctx.next(); else if (!check.disabled) submit(); }
+    else if (e.key === 'Backspace') {
+      var c = linea.querySelectorAll('.chip');
+      if (c.length && !respondido) { e.preventDefault(); devolver(c[c.length - 1]); }
+    }
+  };
+
+  return wrap;
+};
+
+/* ---- match: clasificar en columnas o unir parejas ---- */
+RENDER.match = function (ex, ctx) {
+  var wrap = el('div');
+  var modo = ex.mode === 'pairs' ? 'pairs' : 'classify';
+
+  wrap.appendChild(el('p', 'instruction', ex.instruction ||
+    (modo === 'pairs' ? 'Une cada pareja' : 'Coloca cada uno en su columna')));
+  if (ex.es) wrap.appendChild(el('p', 'prompt-es', ex.es));
+
+  var after = el('div');
+  var row = el('div', 'btn-row');
+  var check = button('Comprobar', 'btn--primary', submit);
+  check.disabled = true;
+  row.appendChild(check);
+
+  var respondido = false;
+  var seleccion = null;
+  var colocados = 0, total = 0;
+
+  if (modo === 'classify') {
+    var items = (ex.items || []).slice(0);
+    total = items.length;
+
+    var bandeja = el('div', 'order__bank match__tray');
+    var cols = el('div', 'match__cols');
+    var zonas = [];
+
+    (ex.groups || []).forEach(function (g, gi) {
+      var col = el('div', 'match__col');
+      col.appendChild(el('p', 'match__head', g));
+      var zona = el('div', 'match__drop');
+      zona.__g = gi;
+      col.appendChild(zona);
+      cols.appendChild(col);
+      zonas.push(zona);
+      zona.addEventListener('click', function () {
+        if (respondido || !seleccion) return;
+        zona.appendChild(seleccion);
+        seleccion.classList.remove('is-sel');
+        seleccion = null;
+        recuento();
+      });
+    });
+
+    /* orden aleatorio para que no se resuelva por posición */
+    items.sort(function () { return Math.random() - 0.5; });
+    items.forEach(function (it) {
+      var c = el('button', 'chip');
+      c.type = 'button';
+      c.textContent = it.t;
+      c.__g = it.g;
+      c.addEventListener('click', function () {
+        if (respondido) return;
+        if (c.parentNode !== bandeja) { bandeja.appendChild(c); c.classList.remove('is-sel'); seleccion = null; recuento(); return; }
+        if (seleccion) seleccion.classList.remove('is-sel');
+        seleccion = (seleccion === c) ? null : c;
+        if (seleccion) c.classList.add('is-sel');
+      });
+      bandeja.appendChild(c);
+    });
+
+    wrap.appendChild(bandeja);
+    wrap.appendChild(cols);
+
+    var recuento = function () {
+      colocados = total - bandeja.querySelectorAll('.chip').length;
+      check.disabled = respondido || colocados < total;
+    };
+
+    var evaluar = function () {
+      var aciertos = 0;
+      zonas.forEach(function (z) {
+        [].forEach.call(z.querySelectorAll('.chip'), function (c) {
+          var bien = c.__g === z.__g;
+          c.classList.add(bien ? 'chip--ok' : 'chip--bad');
+          if (bien) aciertos++;
+        });
+      });
+      return { aciertos: aciertos, total: total };
+    };
+    var solucion = function () {
+      return (ex.groups || []).map(function (g, gi) {
+        return g + ': ' + (ex.items || []).filter(function (i) { return i.g === gi; })
+          .map(function (i) { return i.t; }).join(', ');
+      }).join(' · ');
+    };
+    wrap.__evaluar = evaluar;
+    wrap.__solucion = solucion;
+
+  } else {
+    var pares = (ex.pairs || []).slice(0);
+    total = pares.length;
+
+    var tabla = el('div', 'match__pairs');
+    var izq = el('div', 'match__side');
+    var der = el('div', 'match__side');
+    tabla.appendChild(izq);
+    tabla.appendChild(der);
+    wrap.appendChild(tabla);
+
+    var derechas = pares.map(function (p, i) { return { t: p.r, i: i }; });
+    derechas.sort(function () { return Math.random() - 0.5; });
+
+    var elegidoIzq = null;
+
+    /* Deshace un enlace dejando las dos fichas como estaban.
+       Si no se limpian las dos, una queda con pinta de enlazada
+       sin estarlo, y el contador deja de cuadrar. */
+    function desenlazar(chip) {
+      if (!chip || !chip.__par) return;
+      var otro = chip.__par;
+      chip.__par = null;
+      otro.__par = null;
+      chip.classList.remove('is-linked');
+      otro.classList.remove('is-linked');
+    }
+
+    pares.forEach(function (p, i) {
+      var b = el('button', 'chip chip--wide');
+      b.type = 'button';
+      b.textContent = p.l;
+      b.__i = i;
+      b.addEventListener('click', function () {
+        if (respondido) return;
+        /* pulsar una ficha ya enlazada la suelta */
+        if (b.__par) { desenlazar(b); pintarEnlaces(); return; }
+        if (elegidoIzq) elegidoIzq.classList.remove('is-sel');
+        elegidoIzq = (elegidoIzq === b) ? null : b;
+        if (elegidoIzq) b.classList.add('is-sel');
+      });
+      izq.appendChild(b);
+    });
+
+    derechas.forEach(function (d) {
+      var b = el('button', 'chip chip--wide');
+      b.type = 'button';
+      b.textContent = d.t;
+      b.__i = d.i;
+      b.addEventListener('click', function () {
+        if (respondido) return;
+        if (!elegidoIzq) { if (b.__par) { desenlazar(b); pintarEnlaces(); } return; }
+        desenlazar(elegidoIzq);   /* por si el izquierdo ya tenía pareja */
+        desenlazar(b);            /* y por si el derecho la tenía */
+        elegidoIzq.__par = b;
+        b.__par = elegidoIzq;
+        elegidoIzq.classList.remove('is-sel');
+        elegidoIzq.classList.add('is-linked');
+        b.classList.add('is-linked');
+        elegidoIzq = null;
+        pintarEnlaces();
+      });
+      der.appendChild(b);
+    });
+
+    function pintarEnlaces() {
+      colocados = [].filter.call(izq.querySelectorAll('.chip'), function (b) { return !!b.__par; }).length;
+      check.disabled = respondido || colocados < total;
+    }
+
+    wrap.__evaluar = function () {
+      var aciertos = 0;
+      [].forEach.call(izq.querySelectorAll('.chip'), function (b) {
+        var bien = !!b.__par && b.__par.__i === b.__i;
+        b.classList.remove('is-linked');
+        b.classList.add(bien ? 'chip--ok' : 'chip--bad');
+        if (b.__par) {
+          b.__par.classList.remove('is-linked');
+          b.__par.classList.add(bien ? 'chip--ok' : 'chip--bad');
+        }
+        if (bien) aciertos++;
+      });
+      return { aciertos: aciertos, total: total };
+    };
+    wrap.__solucion = function () {
+      return pares.map(function (p) { return p.l + ' → ' + p.r; }).join(' · ');
+    };
+  }
+
+  wrap.appendChild(row);
+  wrap.appendChild(after);
+
+  function submit() {
+    if (respondido) return;
+    respondido = true;
+    check.disabled = true;
+    row.innerHTML = '';
+
+    var r = wrap.__evaluar();
+    var ok = r.aciertos === r.total;
+
+    after.appendChild(trapPanel({
+      trap: null,
+      ok: wrap.__solucion(),
+      okLabel: ok ? 'Todo correcto' : r.aciertos + ' de ' + r.total + ' · la solución',
+      why: ex.why
+    }));
+
+    var row2 = el('div', 'btn-row');
+    var next = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+    row2.appendChild(next);
+    after.appendChild(row2);
+    next.focus();
+
+    ctx.score(ok, ex);
+    ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+  }
+
+  ctx.keys = function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); if (respondido) ctx.next(); else if (!check.disabled) submit(); }
+  };
+
+  return wrap;
+};
+
 /* ---- speaking: cronómetro + MediaRecorder + respuesta modelo ---- */
 RENDER.speaking = function (ex, ctx) {
   var wrap = el('div');
@@ -1405,7 +1973,6 @@ function viewMap() {
   if (S.missed.length) {
     right.appendChild(button('Repasar fallos (' + Math.min(20, S.missed.length) + ')', 'btn--ghost', function () { goto('#/review'); }));
   }
-  right.appendChild(button('Reiniciar', 'btn--ghost btn--danger btn--sm', resetAll));
   head.appendChild(right);
   v.appendChild(head);
 
@@ -1461,7 +2028,57 @@ function viewMap() {
     v.appendChild(warn);
   }
 
+  v.appendChild(bloqueDatos());
   mount(v);
+}
+
+/* Copia de seguridad. El progreso vive en el navegador, así que esta
+   es la única forma de moverlo de dispositivo o de recuperarlo si se
+   borran los datos del navegador. Las actualizaciones de la web no lo
+   tocan: la clave de almacenamiento no cambia nunca. */
+function bloqueDatos() {
+  var sec = el('section', 'shelf datos');
+  sec.appendChild(el('p', 'eyebrow', 'Tus datos'));
+
+  var texto = el('p', 'muted');
+  texto.style.maxWidth = '52ch';
+  texto.style.marginBottom = '1rem';
+  texto.textContent = 'El progreso se guarda en este navegador. Actualizar la web no lo borra, pero limpiar los datos del navegador sí. Guarda una copia si quieres llevártelo a otro dispositivo.';
+  sec.appendChild(texto);
+
+  var msg = el('p', 'datos__msg');
+
+  var row = el('div', 'btn-row');
+  row.appendChild(button('Guardar copia', 'btn--ghost', function () {
+    exportProgress();
+    msg.className = 'datos__msg is-ok';
+    msg.textContent = 'Copia descargada. Guárdala donde no se te pierda.';
+  }));
+
+  var input = el('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.style.display = 'none';
+  input.addEventListener('change', function () {
+    if (!input.files || !input.files[0]) return;
+    var f = input.files[0];
+    input.value = '';
+    importProgress(f, function (err, res) {
+      if (err) { msg.className = 'datos__msg is-bad'; msg.textContent = err; return; }
+      msg.className = 'datos__msg is-ok';
+      msg.textContent = 'Copia restaurada: ahora tienes ' + res.dias + ' días hechos' +
+        (res.nuevos > 0 ? ' (' + res.nuevos + ' nuevos desde la copia).' : '. No había nada nuevo que añadir.');
+      setTimeout(function () { viewMap(); }, 1600);
+    });
+  });
+  sec.appendChild(input);
+
+  row.appendChild(button('Restaurar copia', 'btn--ghost', function () { input.click(); }));
+  row.appendChild(button('Reiniciar', 'btn--ghost btn--danger btn--sm', resetAll));
+
+  sec.appendChild(row);
+  sec.appendChild(msg);
+  return sec;
 }
 
 function cellFor(n, today) {
@@ -1646,7 +2263,9 @@ function renderStep() {
       if (run.marks[run.i] !== false) run.marks[run.i] = ok;
       /* repinta el punto actual sin volver a montar la pantalla */
       var d = dots.children[run.i];
-      if (d) d.className = 'dot dot--now';
+      if (d) d.className = 'dot dot--now ' + (ok ? 'dot--hit' : 'dot--miss');
+      feedback(ok, ok ? 10 : 2);
+      paintStats();
     },
     next: function () {
       if (ctx.cleanup) { try { ctx.cleanup(); } catch (e) {} }
@@ -1850,6 +2469,7 @@ function renderReviewStep() {
       S.xp += gained;
       dropMissed(item.id);
       commit();
+      feedback(ok, gained);
     },
     next: function () {
       if (ctx.cleanup) { try { ctx.cleanup(); } catch (e) {} }

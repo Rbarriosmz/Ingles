@@ -198,6 +198,12 @@ REGISTER_DAY({
      --------------------------------------------------------- */
   { title: "Cierre: todo mezclado", items: [
 
+    { type:"order",
+      es:"Siempre compro pan fresco por la mañana.",
+      words:["I","always","buy","fresh","bread","in","the","morning"],
+      trap:"I buy always bread fresh in the morning.",
+      why:"Monta la frase y verás las tres decisiones del día juntas: el adverbio de frecuencia **entre el sujeto y el verbo**, el adjetivo **delante** del sustantivo, y el complemento de tiempo al final. Si te ha salido <em>bread fresh</em>, tienes el reflejo español todavía encendido." },
+
     { type:"mcq",
       es:"Mi jefe habla siempre muy rápido en las reuniones.",
       opts:["My boss always speaks very quickly in meetings.","My boss speaks always very fast in the meetings.","Always my boss speaks very quickly in meetings.","My boss always speaks in meetings very quickly."],

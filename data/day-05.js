@@ -196,6 +196,19 @@ REGISTER_DAY({
      --------------------------------------------------------- */
   { title: "Cierre: todo mezclado", items: [
 
+    { type:"match", mode:"pairs",
+      es:"Une cada palabra inglesa con lo que significa de verdad.",
+      instruction:"Pulsa una palabra de la izquierda y luego su significado",
+      pairs:[
+        {l:"actually",   r:"en realidad"},
+        {l:"eventually", r:"al final, con el tiempo"},
+        {l:"sensible",   r:"sensato"},
+        {l:"pretend",    r:"fingir"},
+        {l:"support",    r:"apoyar"},
+        {l:"library",    r:"biblioteca"}
+      ],
+      why:"Las seis existen en español con una forma parecida y las seis significan otra cosa. El que más caro sale por escrito es <em>actually</em>, porque encaja en cualquier frase sin chirriar y cambia el sentido sin que nadie lo note." },
+
     { type:"mcq",
       es:"Al final me di cuenta de que había discutido con él por una tontería.",
       opts:["I eventually realised I'd argued with him over something silly.","Actually I realised of that I had discussed with him for a silly thing.","Finally I gave myself account that I had discussed with him about a stupid thing.","Eventually I realised that I had discussed with him for a silly topic."],

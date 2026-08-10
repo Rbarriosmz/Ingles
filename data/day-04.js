@@ -89,6 +89,17 @@ REGISTER_DAY({
      --------------------------------------------------------- */
   { title: "Bloques que hay que memorizar enteros", items: [
 
+    { type:"match", mode:"classify",
+      es:"Cada bloque va con un verbo, y solo con uno.",
+      instruction:"Pulsa una ficha y luego su columna",
+      groups:["make","do","take"],
+      items:[
+        {t:"a mistake", g:0}, {t:"a decision", g:0},
+        {t:"the shopping", g:1}, {t:"your best", g:1},
+        {t:"a photo", g:2}, {t:"a break", g:2}
+      ],
+      why:"No hay regla que te salve: se aprenden así, por bloques. Pero la tendencia ayuda a fijarlos: **make** crea algo que no existía (un error, una decisión), **do** ejecuta una tarea (la compra, lo que puedas), y **take** coge algo que ya está ahí (una foto, un descanso)." },
+
     { type:"mcq",
       es:"Me hizo una pregunta muy difícil.",
       opts:["She made me a very difficult question.","She asked me a very difficult question.","She did me a very difficult question.","She put me a very difficult question."],

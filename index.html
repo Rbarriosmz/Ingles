@@ -10,7 +10,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
-<link rel="stylesheet" href="assets/styles.css">
+<!-- El ?v= fuerza al navegador a coger la versión nueva tras una
+     actualización, en vez de servir la cacheada. Se sube a mano
+     en cada despliegue que cambie css o js. -->
+<link rel="stylesheet" href="assets/styles.css?v=3">
 </head>
 <body>
 
@@ -40,6 +43,7 @@
       </div>
     </div>
     <div class="session" id="session" hidden>
+      <button type="button" class="session__sound" id="session-sound" aria-pressed="true" title="Sonido"></button>
       <span class="session__who" id="session-who"></span>
       <button type="button" class="session__out" id="session-out">Salir</button>
     </div>
@@ -54,10 +58,10 @@
   </p>
 </noscript>
 
-<script src="data/curriculum.js"></script>
-<script src="data/users.js"></script>
-<script src="assets/auth.js"></script>
-<script src="assets/app.js"></script>
+<script src="data/curriculum.js?v=3"></script>
+<script src="data/users.js?v=3"></script>
+<script src="assets/auth.js?v=3"></script>
+<script src="assets/app.js?v=3"></script>
 
 </body>
 </html>
