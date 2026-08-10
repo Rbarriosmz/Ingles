@@ -175,6 +175,16 @@ window.CURRICULUM = {
       focus:'Las cuatro partes del oral, cronometradas, grabándote para poder escucharte después.' }
   ],
 
+  /* Simulacros. Van por libre: no dependen del recorrido de 60 días.
+     Añadir uno es crear su archivo en data/ y una línea aquí. */
+  exams: [
+    { id:'ruoe-1', file:'exam-ruoe-1.js',
+      paper:'Reading & Use of English',
+      title:'Prueba 1',
+      parts:5, questions:36, minutes:75,
+      focus:'Las cinco primeras partes del papel 1 del B2 First, con el mismo número de preguntas y el mismo tipo de distractor que el examen real. Se corrige sobre la marcha.' }
+  ],
+
   trophies: [
     { day:3,  name:'Los tres primeros reflejos',
       text:'Orden de palabras, sujeto obligatorio y artículos. Son los tres calcos que aparecen en la primera frase que digas, y ahora los ves venir.' },

@@ -34,7 +34,7 @@ var DEFAULTS = { done:{}, xp:0, streak:0, last:null, missed:[], trophies:[] };
    Si el esquema evoluciona, se sube SCHEMA y se anade un paso en
    migrate(), que solo puede anadir campos o corregirlos. Nunca borrar.
    Cambiar la clave equivaldria a borrarle el progreso a todo el mundo. */
-var SCHEMA = 2;
+var SCHEMA = 3;
 
 var storageOK = (function () {
   try {
@@ -60,6 +60,7 @@ function normalizeState(raw) {
   s.last    = typeof raw.last === 'string' ? raw.last : null;
   s.missed  = Object.prototype.toString.call(raw.missed) === '[object Array]' ? raw.missed : [];
   s.trophies = Object.prototype.toString.call(raw.trophies) === '[object Array]' ? raw.trophies : [];
+  s.exams   = (raw.exams && typeof raw.exams === 'object') ? raw.exams : {};
   return migrate(s);
 }
 
@@ -67,11 +68,15 @@ function normalizeState(raw) {
    Cada paso solo anade o corrige; ninguno borra. */
 function migrate(s) {
   if (s.v < 2) {
-    /* v1 no guardaba la version ni el recuento de pasos por dia.
-       No hay nada que convertir: solo se sella. */
+    /* v1 no guardaba la version. No hay nada que convertir: solo se sella. */
     s.v = 2;
   }
-  /* futuros pasos: if (s.v < 3) { ...; s.v = 3; } */
+  if (s.v < 3) {
+    /* v3 anade los simulacros. Los dias no se tocan. */
+    if (!s.exams) s.exams = {};
+    s.v = 3;
+  }
+  /* futuros pasos: if (s.v < 4) { ...; s.v = 4; } */
   s.v = SCHEMA;
   return s;
 }
@@ -117,6 +122,20 @@ function mergeState(a, b) {
   out.trophies = [];
   [].concat(a.trophies, b.trophies).forEach(function (t) {
     if (out.trophies.indexOf(t) === -1) out.trophies.push(t);
+  });
+
+  /* simulacros: por examen y por parte, gana la mejor nota */
+  out.exams = {};
+  [a.exams, b.exams].forEach(function (src) {
+    for (var ex in src) {
+      if (!src.hasOwnProperty(ex)) continue;
+      if (!out.exams[ex]) out.exams[ex] = {};
+      for (var p in src[ex]) {
+        if (!src[ex].hasOwnProperty(p)) continue;
+        var prev = out.exams[ex][p];
+        if (!prev || (src[ex][p].score || 0) > (prev.score || 0)) out.exams[ex][p] = src[ex][p];
+      }
+    }
   });
 
   return out;
@@ -271,6 +290,16 @@ function norm(s) {
 
 function words(s) { var t = norm(s); return t ? t.split(' ') : []; }
 
+/* Cuenta como cuenta Cambridge en las transformaciones: una
+   contracción son DOS palabras. "didn't" = did + not, así que
+   "didn't need to wait" son cinco, no cuatro. */
+function palabrasExamen(s) {
+  var t = norm(s);
+  if (!t) return 0;
+  t = t.replace(/n't\b/g, ' not').replace(/'(s|re|ve|ll|d|m)\b/g, ' $1');
+  return t.split(/\s+/).filter(function (w) { return !!w; }).length;
+}
+
 function todayISO() { return isoOf(new Date()); }
 
 function isoOf(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
@@ -353,6 +382,41 @@ function loadDay(n, cb) {
   };
   s.onerror = function () { settle(null); };
   document.head.appendChild(s);
+}
+
+/* =========================================================
+   4b. Simulacros de examen
+
+   Van por libre: no dependen del recorrido de 60 días ni se
+   desbloquean con nada. Se registran igual que las lecciones,
+   creando un archivo en data/ y nada más.
+   ========================================================= */
+
+var EXAMS = [];
+window.REGISTER_EXAM = function (e) {
+  if (!e || !e.id) return;
+  for (var i = 0; i < EXAMS.length; i++) if (EXAMS[i].id === e.id) { EXAMS[i] = e; return; }
+  EXAMS.push(e);
+};
+
+function examById(id) {
+  for (var i = 0; i < EXAMS.length; i++) if (EXAMS[i].id === id) return EXAMS[i];
+  return null;
+}
+
+function examScore(examId, partN) {
+  return (S.exams && S.exams[examId] && S.exams[examId][partN]) || null;
+}
+
+function saveExamPart(examId, partN, score, right, total) {
+  if (!S.exams) S.exams = {};
+  if (!S.exams[examId]) S.exams[examId] = {};
+  var prev = S.exams[examId][partN];
+  S.exams[examId][partN] = {
+    score: prev ? Math.max(prev.score, score) : score,
+    right: right, total: total, date: todayISO()
+  };
+  commit();
 }
 
 /* =========================================================
@@ -1629,6 +1693,386 @@ RENDER.match = function (ex, ctx) {
   return wrap;
 };
 
+/* =========================================================
+   Formatos del examen: partes 1 a 4 del Use of English
+
+   Las tres primeras comparten forma: un texto con huecos
+   numerados y las preguntas debajo, de una en una. Según
+   aciertas, el hueco se rellena en el texto, así que el texto
+   se va volviendo legible mientras trabajas.
+   ========================================================= */
+
+/* Pinta el texto partiéndolo por los marcadores {1} {2} … */
+function textoConHuecos(box, texto, slots) {
+  var trozos = String(texto).split(/(\{\d+\})/);
+  var p = el('p');
+  trozos.forEach(function (t) {
+    var m = /^\{(\d+)\}$/.exec(t);
+    if (m) {
+      var n = parseInt(m[1], 10);
+      var s = el('span', 'gapslot', '(' + n + ') ' + '……');
+      s.setAttribute('data-n', n);
+      slots[n - 1] = s;
+      p.appendChild(s);
+      return;
+    }
+    /* los saltos de párrafo del original se respetan */
+    var partes = t.split('\n\n');
+    partes.forEach(function (frag, i) {
+      if (i > 0) { box.appendChild(p); p = el('p'); }
+      p.appendChild(document.createTextNode(frag));
+    });
+  });
+  box.appendChild(p);
+}
+
+function rellenaHueco(slot, palabra, ok) {
+  if (!slot) return;
+  slot.textContent = palabra;
+  slot.className = 'gapslot ' + (ok ? 'gapslot--ok' : 'gapslot--bad');
+}
+
+/* Núcleo compartido por cloze, opencloze y wordform. */
+function correPartePorHuecos(ex, ctx, pinta) {
+  var wrap = el('div');
+  if (ex.instructions) wrap.appendChild(el('p', 'instruction', ex.instructions));
+  if (ex.heading) wrap.appendChild(el('h2', 'reading__title', ex.heading));
+
+  if (ex.example) {
+    var eg = el('p', 'examex');
+    eg.innerHTML = '<b>Ejemplo (0):</b> ' + esc(ex.example);
+    wrap.appendChild(eg);
+  }
+
+  var box = el('div', 'reading__text examtext');
+  var slots = [];
+  textoConHuecos(box, ex.text, slots);
+  wrap.appendChild(box);
+
+  var zone = el('div');
+  wrap.appendChild(zone);
+
+  var gaps = ex.gaps || [];
+  var i = 0;
+
+  function paso() {
+    zone.innerHTML = '';
+
+    if (i >= gaps.length) {
+      var fin = el('div', 'btn-row');
+      var b = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+      fin.appendChild(b);
+      zone.appendChild(fin);
+      b.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+      return;
+    }
+
+    slots.forEach(function (s, k) { if (s && k === i) s.classList.add('is-now'); else if (s) s.classList.remove('is-now'); });
+    if (slots[i] && slots[i].scrollIntoView) {
+      try { slots[i].scrollIntoView({ block: 'nearest' }); } catch (e) {}
+    }
+
+    zone.appendChild(el('p', 'qnum', 'Hueco ' + (i + 1) + ' de ' + gaps.length));
+    pinta(gaps[i], i, zone, function (ok, palabra) {
+      rellenaHueco(slots[i], palabra, ok);
+      ctx.score(ok, {
+        type: 'mcq',
+        question: 'Hueco ' + (i + 1) + ' · ' + (ex.heading || 'Use of English'),
+        opts: gaps[i].opts || null,
+        ok: gaps[i].ok,
+        why: gaps[i].why,
+        instruction: ex.title || 'Use of English'
+      });
+      var row = el('div', 'btn-row');
+      var next = button(i + 1 < gaps.length ? 'Siguiente hueco' : 'Ver el resultado', 'btn--primary', function () { i++; paso(); });
+      row.appendChild(next);
+      zone.appendChild(row);
+      next.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); next.click(); } };
+    });
+  }
+
+  paso();
+  return wrap;
+}
+
+/* ---- Part 1: multiple-choice cloze ---- */
+RENDER.cloze = function (ex, ctx) {
+  return correPartePorHuecos(ex, ctx, function (gap, idx, zone, done) {
+    var list = el('div', 'opts');
+    var botones = [];
+    var hecho = false;
+
+    (gap.opts || []).forEach(function (t, k) {
+      var b = el('button', 'opt');
+      b.type = 'button';
+      b.appendChild(el('span', 'opt__key', String.fromCharCode(65 + k)));
+      b.appendChild(el('span', 'opt__t', t));
+      b.addEventListener('click', function () { responde(k); });
+      botones.push(b);
+      list.appendChild(b);
+    });
+    zone.appendChild(list);
+    var after = el('div');
+    zone.appendChild(after);
+
+    function responde(k) {
+      if (hecho) return;
+      hecho = true;
+      var ok = k === gap.ok;
+      botones.forEach(function (b, j) {
+        b.disabled = true;
+        b.className = 'opt ' + (j === gap.ok ? 'opt--ok' : (j === k ? 'opt--bad' : 'opt--dim'));
+      });
+      after.appendChild(trapPanel({
+        trap: null,
+        ok: gap.opts[gap.ok],
+        okLabel: ok ? 'Correcta' : 'La respuesta era',
+        why: gap.why
+      }));
+      done(ok, gap.opts[gap.ok]);
+    }
+
+    ctx.keys = function (e) {
+      var k = optionIndexFromKey(e);
+      if (k >= 0 && k < botones.length) { e.preventDefault(); responde(k); }
+    };
+  });
+};
+
+/* ---- Part 2: open cloze (una palabra, sin opciones) ---- */
+RENDER.opencloze = function (ex, ctx) {
+  return correPartePorHuecos(ex, ctx, function (gap, idx, zone, done) {
+    var resp = isArr(gap.answer) ? gap.answer : [gap.answer];
+    var linea = el('div', 'gap-line');
+    var input = el('input', 'gap-input');
+    input.type = 'text';
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('aria-label', 'Escribe la palabra que falta');
+    input.size = 14;
+    linea.appendChild(document.createTextNode('Hueco (' + (idx + 1) + '): '));
+    linea.appendChild(input);
+    zone.appendChild(linea);
+
+    var after = el('div');
+    var row = el('div', 'btn-row');
+    var check = button('Comprobar', 'btn--primary', envia);
+    row.appendChild(check);
+    zone.appendChild(row);
+    zone.appendChild(after);
+    setTimeout(function () { input.focus(); }, 40);
+
+    var hecho = false;
+    function envia() {
+      if (hecho) return;
+      var t = norm(input.value);
+      if (!t) { input.focus(); return; }
+      hecho = true;
+      var ok = false;
+      for (var j = 0; j < resp.length; j++) if (norm(resp[j]) === t) { ok = true; break; }
+      input.disabled = true;
+      input.className = 'gap-input ' + (ok ? 'gap-input--ok' : 'gap-input--bad');
+      row.innerHTML = '';
+      after.appendChild(trapPanel({
+        trap: ok ? null : input.value,
+        ok: resp[0],
+        okLabel: ok ? 'Bien' : 'La palabra era',
+        why: gap.why
+      }));
+      if (resp.length > 1) {
+        var alt = el('p', 'answers');
+        alt.innerHTML = 'También vale: ' + resp.slice(1).map(function (a) { return '<b>' + esc(a) + '</b>'; }).join(' · ');
+        after.appendChild(alt);
+      }
+      done(ok, resp[0]);
+    }
+
+    ctx.keys = function (e) { if (e.key === 'Enter' && !hecho) { e.preventDefault(); envia(); } };
+  });
+};
+
+/* ---- Part 3: word formation ---- */
+RENDER.wordform = function (ex, ctx) {
+  return correPartePorHuecos(ex, ctx, function (gap, idx, zone, done) {
+    var resp = isArr(gap.answer) ? gap.answer : [gap.answer];
+
+    var raiz = el('p', 'wordroot');
+    raiz.innerHTML = 'Palabra base: <b>' + esc(gap.root) + '</b>';
+    zone.appendChild(raiz);
+
+    var linea = el('div', 'gap-line');
+    var input = el('input', 'gap-input');
+    input.type = 'text';
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('aria-label', 'Escribe la palabra transformada');
+    input.size = 16;
+    linea.appendChild(document.createTextNode('Hueco (' + (idx + 1) + '): '));
+    linea.appendChild(input);
+    zone.appendChild(linea);
+
+    var after = el('div');
+    var row = el('div', 'btn-row');
+    row.appendChild(button('Comprobar', 'btn--primary', envia));
+    zone.appendChild(row);
+    zone.appendChild(after);
+    setTimeout(function () { input.focus(); }, 40);
+
+    var hecho = false;
+    function envia() {
+      if (hecho) return;
+      var t = norm(input.value);
+      if (!t) { input.focus(); return; }
+      hecho = true;
+      var ok = false;
+      for (var j = 0; j < resp.length; j++) if (norm(resp[j]) === t) { ok = true; break; }
+      input.disabled = true;
+      input.className = 'gap-input ' + (ok ? 'gap-input--ok' : 'gap-input--bad');
+      row.innerHTML = '';
+      after.appendChild(trapPanel({
+        trap: ok ? null : input.value,
+        ok: gap.root + ' → ' + resp[0],
+        okLabel: ok ? 'Bien' : 'La transformación era',
+        why: gap.why
+      }));
+      done(ok, resp[0]);
+    }
+
+    ctx.keys = function (e) { if (e.key === 'Enter' && !hecho) { e.preventDefault(); envia(); } };
+  });
+};
+
+/* ---- Part 4: key word transformations ---- */
+RENDER.transform = function (ex, ctx) {
+  var wrap = el('div');
+  if (ex.instructions) wrap.appendChild(el('p', 'instruction', ex.instructions));
+
+  var zone = el('div');
+  wrap.appendChild(zone);
+
+  var items = ex.items || [];
+  var i = 0;
+
+  function paso() {
+    zone.innerHTML = '';
+    if (i >= items.length) {
+      var fin = el('div', 'btn-row');
+      var b = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+      fin.appendChild(b);
+      zone.appendChild(fin);
+      b.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+      return;
+    }
+
+    var it = items[i];
+    var resp = isArr(it.answer) ? it.answer : [it.answer];
+    var maxPal = it.max || 5;
+
+    zone.appendChild(el('p', 'qnum', 'Frase ' + (i + 1) + ' de ' + items.length));
+    zone.appendChild(el('p', 'question', it.from));
+
+    var clave = el('p', 'keyword');
+    clave.innerHTML = '<b>' + esc(it.key) + '</b>';
+    zone.appendChild(clave);
+
+    var linea = el('div', 'gap-line transform__line');
+    linea.appendChild(document.createTextNode(it.before || ''));
+    var input = el('input', 'gap-input gap-input--wide');
+    input.type = 'text';
+    input.setAttribute('autocomplete', 'off');
+    input.setAttribute('autocapitalize', 'off');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('aria-label', 'Completa con entre dos y cinco palabras');
+    input.size = 26;
+    linea.appendChild(input);
+    linea.appendChild(document.createTextNode(it.after || ''));
+    zone.appendChild(linea);
+
+    var cuenta = el('p', 'answers', '0 palabras · entre 2 y ' + maxPal + ', y tiene que incluir ' + it.key);
+    zone.appendChild(cuenta);
+    input.addEventListener('input', function () {
+      var n = palabrasExamen(input.value);
+      var aviso = (n > maxPal) ? ' · te has pasado' : '';
+      cuenta.textContent = n + (n === 1 ? ' palabra' : ' palabras') + ' · entre 2 y ' + maxPal +
+                           ', y tiene que incluir ' + it.key + aviso;
+      cuenta.style.color = n > maxPal ? 'var(--coral)' : '';
+    });
+
+    var after = el('div');
+    var row = el('div', 'btn-row');
+    row.appendChild(button('Comprobar', 'btn--primary', envia));
+    zone.appendChild(row);
+    zone.appendChild(after);
+    setTimeout(function () { input.focus(); }, 40);
+
+    var hecho = false;
+    function envia() {
+      if (hecho) return;
+      var t = norm(input.value);
+      if (!t) { input.focus(); return; }
+      hecho = true;
+
+      var ok = false;
+      for (var j = 0; j < resp.length; j++) if (norm(resp[j]) === t) { ok = true; break; }
+
+      /* pistas concretas cuando falla, como haría un profesor */
+      var pistas = [];
+      var n = palabrasExamen(input.value);
+      if (n > maxPal) pistas.push('Te has pasado: ' + n + ' palabras, y el máximo es ' + maxPal +
+        '. Recuerda que una contracción cuenta como dos: <em>didn\'t</em> son <em>did</em> y <em>not</em>.');
+      if (n < 2) pistas.push('Hacen falta al menos dos palabras.');
+      if (t.indexOf(norm(it.key)) === -1) pistas.push('No has usado la palabra clave <b>' + esc(it.key) + '</b>, y es obligatoria.');
+
+      input.disabled = true;
+      input.className = 'gap-input gap-input--wide ' + (ok ? 'gap-input--ok' : 'gap-input--bad');
+      row.innerHTML = '';
+
+      after.appendChild(trapPanel({
+        trap: ok ? null : input.value,
+        ok: (it.before || '') + resp[0] + (it.after || ''),
+        okLabel: ok ? 'Exacto' : 'La respuesta era',
+        why: it.why
+      }));
+
+      if (!ok && pistas.length) {
+        var p = el('div', 'notice');
+        p.innerHTML = pistas.join('<br>');
+        after.appendChild(p);
+      }
+      if (resp.length > 1) {
+        var alt = el('p', 'answers');
+        alt.innerHTML = 'También vale: ' + resp.slice(1).map(function (a) { return '<b>' + esc(a) + '</b>'; }).join(' · ');
+        after.appendChild(alt);
+      }
+
+      ctx.score(ok, {
+        type: 'gap',
+        es: it.from,
+        text: (it.before || '') + '___' + (it.after || ''),
+        answer: resp,
+        why: it.why
+      });
+
+      var row2 = el('div', 'btn-row');
+      var next = button(i + 1 < items.length ? 'Siguiente frase' : 'Ver el resultado', 'btn--primary', function () { i++; paso(); });
+      row2.appendChild(next);
+      after.appendChild(row2);
+      next.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); next.click(); } };
+    }
+
+    ctx.keys = function (e) { if (e.key === 'Enter' && !hecho) { e.preventDefault(); envia(); } };
+  }
+
+  paso();
+  return wrap;
+};
+
 /* ---- speaking: cronómetro + MediaRecorder + respuesta modelo ---- */
 RENDER.speaking = function (ex, ctx) {
   var wrap = el('div');
@@ -1970,6 +2414,9 @@ function viewMap() {
   head.appendChild(left);
 
   var right = el('div', 'btn-row');
+  if (EXAM_PLAN.length) {
+    right.appendChild(button('Simulacros', 'btn--primary', function () { goto('#/exams'); }));
+  }
   if (S.missed.length) {
     right.appendChild(button('Repasar fallos (' + Math.min(20, S.missed.length) + ')', 'btn--ghost', function () { goto('#/review'); }));
   }
@@ -2113,6 +2560,224 @@ function resetAll() {
   if (storageOK) { try { window.localStorage.removeItem(KEY); } catch (e) {} }
   commit();
   goto('#/map');
+}
+
+/* =========================================================
+   10b. Pantallas: simulacros
+   ========================================================= */
+
+var EXAM_PLAN = (window.CURRICULUM && window.CURRICULUM.exams) || [];
+var examPending = {};
+
+function loadExam(id, cb) {
+  var ya = examById(id);
+  if (ya) { cb(ya); return; }
+  if (examPending[id]) { examPending[id].push(cb); return; }
+  examPending[id] = [cb];
+
+  var plan = null;
+  for (var i = 0; i < EXAM_PLAN.length; i++) if (EXAM_PLAN[i].id === id) plan = EXAM_PLAN[i];
+  if (!plan) { cerrar(null); return; }
+
+  function cerrar(ex) {
+    var l = examPending[id] || [];
+    delete examPending[id];
+    for (var k = 0; k < l.length; k++) l[k](ex);
+  }
+
+  var s = document.createElement('script');
+  s.src = 'data/' + plan.file;
+  s.async = false;
+  s.onload = function () { cerrar(examById(id)); };
+  s.onerror = function () { cerrar(null); };
+  document.head.appendChild(s);
+}
+
+function viewExams() {
+  var v = view('exams');
+  v.appendChild(el('p', 'eyebrow', 'Simulacros'));
+  var h = el('h1', 'map__title');
+  h.innerHTML = 'El examen, <em>parte por parte.</em>';
+  v.appendChild(h);
+  v.appendChild(el('p', 'lede', 'Los formatos exactos del Cambridge B2 First, con el mismo número de preguntas y el mismo tipo de trampa que el examen real. Se corrigen sobre la marcha: cada respuesta te explica por qué. No hacen falta días completados para entrar.'));
+
+  if (!EXAM_PLAN.length) {
+    var e = el('div', 'empty');
+    e.appendChild(el('h3', null, 'Todavía no hay simulacros'));
+    e.appendChild(el('p', null, 'Añade uno en la lista exams de data/curriculum.js y crea su archivo en data/.'));
+    v.appendChild(e);
+  }
+
+  var lista = el('div', 'exams');
+  EXAM_PLAN.forEach(function (p) {
+    var hechas = 0, suma = 0;
+    var reg = S.exams && S.exams[p.id];
+    if (reg) for (var k in reg) if (reg.hasOwnProperty(k)) { hechas++; suma += reg[k].score || 0; }
+    var media = hechas ? Math.round(suma / hechas) : null;
+
+    var card = el('button', 'examcard');
+    card.type = 'button';
+    card.appendChild(el('p', 'examcard__paper', p.paper));
+    card.appendChild(el('p', 'examcard__title', p.title));
+    card.appendChild(el('p', 'examcard__meta',
+      p.parts + ' partes · ' + p.questions + ' preguntas · ' + p.minutes + ' min en el examen real'));
+
+    var estado = el('p', 'examcard__state');
+    if (hechas === 0) estado.textContent = 'Sin empezar';
+    else if (hechas < p.parts) { estado.textContent = hechas + ' de ' + p.parts + ' partes · media ' + media + '%'; estado.className = 'examcard__state is-part'; }
+    else { estado.textContent = 'Completo · media ' + media + '%'; estado.className = 'examcard__state is-done'; }
+    card.appendChild(estado);
+
+    card.addEventListener('click', function () { goto('#/exam/' + p.id); });
+    lista.appendChild(card);
+  });
+  v.appendChild(lista);
+
+  var row = el('div', 'btn-row');
+  row.style.marginTop = '2rem';
+  row.appendChild(button('Volver al mapa', 'btn--ghost', function () { goto('#/map'); }));
+  v.appendChild(row);
+
+  mount(v);
+}
+
+function viewExam(id) {
+  var plan = null;
+  for (var i = 0; i < EXAM_PLAN.length; i++) if (EXAM_PLAN[i].id === id) plan = EXAM_PLAN[i];
+  if (!plan) { goto('#/exams'); return; }
+
+  var v = view('exam');
+  v.appendChild(el('p', 'eyebrow', plan.paper));
+  v.appendChild(el('h1', 'cover__title', plan.title));
+  v.appendChild(el('p', 'cover__focus', plan.focus || ''));
+
+  var slot = el('div');
+  v.appendChild(slot);
+  mount(v);
+
+  loadExam(id, function (ex) {
+    if (!ex) {
+      var e = el('div', 'empty');
+      e.appendChild(el('h3', null, 'Este simulacro aún no tiene contenido'));
+      var p = el('p');
+      p.innerHTML = 'Crea <code>data/' + esc(plan.file) + '</code> con <code>REGISTER_EXAM({…})</code>.';
+      e.appendChild(p);
+      slot.appendChild(e);
+      var r0 = el('div', 'btn-row');
+      r0.appendChild(button('Volver', 'btn--ghost', function () { goto('#/exams'); }));
+      slot.appendChild(r0);
+      return;
+    }
+
+    var lista = el('ul', 'blocklist');
+    ex.parts.forEach(function (part, idx) {
+      var reg = examScore(id, part.n);
+      var li = el('li');
+      li.style.cursor = 'pointer';
+      li.appendChild(el('span', 'blocklist__n', 'P' + part.n));
+      var t = el('span', 'blocklist__t', part.title);
+      li.appendChild(t);
+      var c = el('span', 'blocklist__c', reg ? reg.right + '/' + reg.total + ' · ' + reg.score + '%' : (part.count + ' preguntas'));
+      if (reg) c.style.color = reg.score >= 60 ? 'var(--mint)' : 'var(--coral)';
+      li.appendChild(c);
+      li.addEventListener('click', function () { goto('#/exam/' + id + '/' + idx); });
+      lista.appendChild(li);
+    });
+    slot.appendChild(lista);
+
+    var siguiente = 0;
+    for (var k = 0; k < ex.parts.length; k++) if (!examScore(id, ex.parts[k].n)) { siguiente = k; break; }
+
+    var row = el('div', 'btn-row');
+    row.style.marginTop = '1.6rem';
+    row.appendChild(button('Empezar por la parte ' + ex.parts[siguiente].n, 'btn--primary', function () { goto('#/exam/' + id + '/' + siguiente); }));
+    row.appendChild(button('Todos los simulacros', 'btn--ghost', function () { goto('#/exams'); }));
+    slot.appendChild(row);
+  });
+}
+
+function viewExamPart(id, idx) {
+  loadExam(id, function (ex) {
+    if (!ex || !ex.parts[idx]) { goto('#/exam/' + id); return; }
+    var part = ex.parts[idx];
+    var acc = { right: 0, total: 0 };
+
+    var v = view('lesson');
+    var bar = el('div', 'lesson__bar');
+    bar.appendChild(el('span', 'lesson__count', ex.paper || 'Simulacro'));
+    var marcador = el('span', 'lesson__count exam__live', '0 / ' + part.count);
+    bar.appendChild(marcador);
+    bar.appendChild(button('Salir', 'btn--sm btn--ghost lesson__quit', function () {
+      if (window.confirm('Si sales ahora, esta parte no se guarda. ¿Salir?')) goto('#/exam/' + id);
+    }));
+    v.appendChild(bar);
+
+    var host = el('div', 'step');
+    host.appendChild(el('p', 'step__block', 'Parte ' + part.n + ' · ' + part.title));
+    v.appendChild(host);
+
+    var ctx = {
+      lastStep: true,
+      keys: null, focus: null, cleanup: null,
+      score: function (ok, exNotebook) {
+        acc.total++;
+        if (ok) acc.right++;
+        marcador.textContent = acc.right + ' / ' + part.count;
+        marcador.className = 'lesson__count exam__live' + (ok ? ' is-hit' : ' is-miss');
+        var gan = ok ? 10 : 2;
+        S.xp += gan;
+        if (!ok && exNotebook) addMissed(0, exNotebook, (ex.paper || 'Simulacro') + ' · parte ' + part.n);
+        commit();
+        feedback(ok, gan);
+      },
+      next: function () {
+        var score = acc.total ? Math.round(acc.right / acc.total * 100) : 100;
+        saveExamPart(id, part.n, score, acc.right, acc.total);
+        viewExamPartEnd(id, idx, score, acc);
+      }
+    };
+
+    var node;
+    try { node = RENDER[part.type](part, ctx); }
+    catch (e) {
+      console.error('[La Trampa] Error en la parte ' + part.n + ':', e);
+      node = el('p', 'notice notice--bad', 'Esta parte tiene un problema. Mira la consola.');
+    }
+    host.appendChild(node);
+
+    mount(v);
+    Keys.set(function (e) { if (ctx.keys) ctx.keys(e); });
+  });
+}
+
+function viewExamPartEnd(id, idx, score, acc) {
+  loadExam(id, function (ex) {
+    var part = ex.parts[idx];
+    var v = view('end');
+    v.appendChild(el('p', 'eyebrow', (ex.paper || 'Simulacro') + ' · parte ' + part.n + ' terminada'));
+    v.appendChild(el('p', 'end__xp', score + '%'));
+    v.appendChild(el('p', 'end__xpl', acc.right + ' de ' + acc.total + ' correctas'));
+    v.appendChild(el('h1', 'end__title', tituloExamen(score)));
+
+    var hay = idx + 1 < ex.parts.length;
+    var row = el('div', 'btn-row');
+    if (hay) row.appendChild(button('Parte ' + ex.parts[idx + 1].n, 'btn--primary', function () { goto('#/exam/' + id + '/' + (idx + 1)); }));
+    row.appendChild(button('Ver el simulacro', hay ? 'btn--ghost' : 'btn--primary', function () { goto('#/exam/' + id); }));
+    v.appendChild(row);
+    mount(v);
+    Keys.set(function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); goto(hay ? '#/exam/' + id + '/' + (idx + 1) : '#/exam/' + id); }
+    });
+  });
+}
+
+/* El B2 First se aprueba a partir de 60%. Por debajo de 50 no hay nivel. */
+function tituloExamen(s) {
+  if (s >= 90) return 'Nivel de sobra.';
+  if (s >= 75) return 'Aprobado con margen.';
+  if (s >= 60) return 'Aprobado, pero justo.';
+  if (s >= 45) return 'Todavía no llega.';
+  return 'Esta parte hay que trabajarla entera.';
 }
 
 /* =========================================================
@@ -2454,7 +3119,8 @@ function renderReviewStep() {
   v.appendChild(bar);
 
   var host = el('div', 'step');
-  host.appendChild(el('p', 'step__block', 'Cuaderno de fallos · del día ' + pad2(item.day)));
+  host.appendChild(el('p', 'step__block', 'Cuaderno de fallos · ' +
+    (item.day ? 'del día ' + pad2(item.day) : (item.label || 'simulacro'))));
   v.appendChild(host);
 
   /* El repaso guarda paso a paso: si sales a la mitad, lo repasado
@@ -2540,6 +3206,12 @@ function route() {
     return;
   }
   if (what === 'review') { viewReview(); return; }
+  if (what === 'exams') { viewExams(); return; }
+  if (what === 'exam' && parts[1]) {
+    if (parts[2] !== undefined && parts[2] !== '') viewExamPart(parts[1], parseInt(parts[2], 10) || 0);
+    else viewExam(parts[1]);
+    return;
+  }
 
   run = null;
   review = null;
