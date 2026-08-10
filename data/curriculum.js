@@ -175,6 +175,60 @@ window.CURRICULUM = {
       focus:'Las cuatro partes del oral, cronometradas, grabándote para poder escucharte después.' }
   ],
 
+  /* Etiquetas de diagnóstico.
+     Cada fallo suma en su etiqueta, y con eso la web calcula tus
+     puntos débiles y te arma sesiones de repaso dirigidas. */
+  tagNames: {
+    'word-order':      'Orden de las palabras',
+    'subject':         'Sujeto obligatorio',
+    'article':         'Artículos',
+    'collocation':     'Colocaciones y bloques fijos',
+    'false-friend':    'Falsos amigos',
+    'question':        'Preguntas y negaciones',
+    'countable':       'Contables e incontables',
+    'tense':           'Tiempos verbales',
+    'modal':           'Modales',
+    'gerund':          'Gerundio o infinitivo',
+    'preposition':     'Preposiciones',
+    'function-word':   'Palabras gramaticales (open cloze)',
+    'phrasal':         'Phrasal verbs',
+    'vocab':           'Vocabulario de nivel B2',
+    'word-formation':  'Formación de palabras',
+    'connector':       'Conectores',
+    'conditional':     'Condicionales',
+    'passive':         'Pasiva',
+    'reported':        'Estilo indirecto',
+    'relative':        'Oraciones de relativo',
+    'transform':       'Transformaciones con palabra clave',
+    'reading-detail':  'Lectura: encontrar el dato',
+    'reading-infer':   'Lectura: deducir la intención',
+    'reading-cohesion':'Lectura: cohesión del texto',
+    'listening':       'Comprensión oral',
+    'writing':         'Expresión escrita',
+    'speaking':        'Expresión oral'
+  },
+
+  /* Qué se mide en cada día. Un ejercicio puede llevar su propio
+     campo tags y entonces manda ese; si no, hereda el de su día. */
+  dayTags: {
+    1:['word-order'], 2:['subject','countable'], 3:['article'], 4:['collocation'],
+    5:['false-friend'], 6:['question'],
+    7:['word-order','subject','article','collocation','false-friend','question'],
+    8:['tense'], 9:['tense'], 10:['tense'], 11:['tense'], 12:['gerund'], 13:['modal'], 14:['tense','modal','gerund'],
+    15:['preposition'], 16:['preposition'], 17:['preposition'], 18:['preposition'], 19:['preposition'],
+    20:['collocation'], 21:['preposition','collocation'],
+    22:['phrasal'], 23:['phrasal'], 24:['phrasal'], 25:['collocation','vocab'],
+    26:['word-formation'], 27:['vocab'], 28:['phrasal','vocab','word-formation'],
+    29:['reading-detail'], 30:['reading-detail'], 31:['reading-cohesion'],
+    32:['connector'], 33:['connector'], 34:['reading-infer'], 35:['reading-detail','connector'],
+    36:['writing'], 37:['writing'], 38:['writing'], 39:['writing'], 40:['writing'], 41:['writing'], 42:['writing'],
+    43:['listening'], 44:['listening'], 45:['listening'], 46:['listening'],
+    47:['speaking'], 48:['speaking'], 49:['listening','speaking'],
+    50:['conditional'], 51:['conditional'], 52:['passive'], 53:['reported'], 54:['relative'],
+    55:['transform'], 56:['conditional','passive','reported','relative','transform'],
+    57:['reading-detail','word-formation','transform'], 58:['writing'], 59:['listening'], 60:['speaking']
+  },
+
   /* Simulacros. Van por libre: no dependen del recorrido de 60 días.
      Añadir uno es crear su archivo en data/ y una línea aquí. */
   exams: [

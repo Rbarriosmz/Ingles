@@ -289,6 +289,53 @@ input,textarea{font:inherit;color:inherit}
 }
 .banner:hover .banner__go{transform:translateX(3px)}
 
+/* ---------- herramientas de repaso ---------- */
+
+.tools{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+  gap:.6rem;margin:.9rem 0 .4rem;
+}
+.tool{
+  display:flex;flex-direction:column;gap:.2rem;
+  padding:.9rem 1.1rem;text-align:left;cursor:pointer;
+  border:1px solid var(--line);border-radius:var(--r-m);
+  background:var(--panel);
+  transition:transform .16s var(--step),border-color .16s var(--step),background .16s var(--step);
+}
+.tool:hover{transform:translateY(-2px);border-color:rgba(244,241,232,.3);background:var(--panel-2)}
+.tool__label{
+  font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--muted);
+}
+.tool__value{font-family:var(--display);font-weight:600;font-size:1.05rem;letter-spacing:-.02em;color:var(--chalk)}
+.tool__meta{font-family:var(--mono);font-size:.66rem;color:var(--muted);letter-spacing:.04em}
+
+/* ---------- puntos débiles ---------- */
+
+.weak{display:flex;flex-direction:column;gap:.7rem;margin-top:1.8rem}
+
+.weakrow{
+  padding:1rem 1.2rem;
+  border:1px solid var(--line);border-radius:var(--r-m);
+  background:var(--panel);
+}
+.weakrow.is-worst{border-left:3px solid var(--coral)}
+
+.weakrow__head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem}
+.weakrow__name{font-family:var(--display);font-weight:600;font-size:1.06rem;letter-spacing:-.02em}
+.weakrow__pct{font-family:var(--mono);font-weight:600;font-size:1.1rem;font-variant-numeric:tabular-nums}
+.weakrow__pct.is-bad{color:var(--coral)}
+.weakrow__pct.is-mid{color:var(--marigold)}
+.weakrow__pct.is-ok{color:var(--mint)}
+
+.weakbar{height:4px;border-radius:999px;background:rgba(244,241,232,.1);overflow:hidden;margin:.6rem 0 .7rem}
+.weakbar__fill{height:100%;border-radius:999px;background:var(--mint);transition:width .5s var(--step)}
+.weakbar__fill.is-bad{background:var(--coral)}
+.weakbar__fill.is-mid{background:var(--marigold)}
+
+.weakrow__foot{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.weakrow__meta{font-family:var(--mono);font-size:.68rem;letter-spacing:.04em;color:var(--muted)}
+
 /* ---------- simulacros ---------- */
 
 .exams{
@@ -317,6 +364,24 @@ input,textarea{font:inherit;color:inherit}
 }
 .examcard__state.is-part{color:var(--marigold)}
 .examcard__state.is-done{color:var(--mint)}
+
+.examtotal{
+  padding:1.2rem 1.4rem;margin:1.6rem 0 1rem;
+  border:1px solid rgba(232,101,74,.4);border-left:4px solid var(--coral);
+  border-radius:var(--r-m);background:rgba(232,101,74,.07);
+}
+.examtotal.is-pass{border-color:rgba(111,207,151,.4);border-left-color:var(--mint);background:rgba(111,207,151,.07)}
+.examtotal__label{
+  font-family:var(--mono);font-size:.62rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin:0;
+}
+.examtotal__pct{
+  font-family:var(--mono);font-weight:600;font-size:2.6rem;line-height:1;
+  letter-spacing:-.04em;margin:.3rem 0 .4rem;color:var(--coral);
+  font-variant-numeric:tabular-nums;
+}
+.examtotal.is-pass .examtotal__pct{color:var(--mint)}
+.examtotal__meta{font-size:.92rem;color:var(--muted);margin:0}
 
 /* texto del examen con huecos numerados */
 .examtext{font-size:1.06rem;line-height:1.95;max-height:26rem}

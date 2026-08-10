@@ -34,7 +34,7 @@ var DEFAULTS = { done:{}, xp:0, streak:0, last:null, missed:[], trophies:[] };
    Si el esquema evoluciona, se sube SCHEMA y se anade un paso en
    migrate(), que solo puede anadir campos o corregirlos. Nunca borrar.
    Cambiar la clave equivaldria a borrarle el progreso a todo el mundo. */
-var SCHEMA = 3;
+var SCHEMA = 4;
 
 var storageOK = (function () {
   try {
@@ -61,6 +61,7 @@ function normalizeState(raw) {
   s.missed  = Object.prototype.toString.call(raw.missed) === '[object Array]' ? raw.missed : [];
   s.trophies = Object.prototype.toString.call(raw.trophies) === '[object Array]' ? raw.trophies : [];
   s.exams   = (raw.exams && typeof raw.exams === 'object') ? raw.exams : {};
+  s.tags    = (raw.tags && typeof raw.tags === 'object') ? raw.tags : {};
   return migrate(s);
 }
 
@@ -76,7 +77,13 @@ function migrate(s) {
     if (!s.exams) s.exams = {};
     s.v = 3;
   }
-  /* futuros pasos: if (s.v < 4) { ...; s.v = 4; } */
+  if (s.v < 4) {
+    /* v4 anade el diagnostico por etiquetas. Arranca vacio y se va
+       llenando solo; lo ya hecho no se puede reconstruir hacia atras. */
+    if (!s.tags) s.tags = {};
+    s.v = 4;
+  }
+  /* futuros pasos: if (s.v < 5) { ...; s.v = 5; } */
   s.v = SCHEMA;
   return s;
 }
@@ -122,6 +129,17 @@ function mergeState(a, b) {
   out.trophies = [];
   [].concat(a.trophies, b.trophies).forEach(function (t) {
     if (out.trophies.indexOf(t) === -1) out.trophies.push(t);
+  });
+
+  /* diagnóstico: los intentos se suman, porque son historial */
+  out.tags = {};
+  [a.tags, b.tags].forEach(function (src) {
+    for (var t in src) {
+      if (!src.hasOwnProperty(t)) continue;
+      if (!out.tags[t]) out.tags[t] = { right: 0, wrong: 0 };
+      out.tags[t].right += (src[t].right || 0);
+      out.tags[t].wrong += (src[t].wrong || 0);
+    }
   });
 
   /* simulacros: por examen y por parte, gana la mejor nota */
@@ -337,6 +355,75 @@ function trophyFor(n) {
 }
 
 function isUnlocked(n) { return n === 1 || !!S.done[n - 1]; }
+
+/* =========================================================
+   3b. Diagnóstico por etiquetas
+
+   Cada acierto y cada fallo suma en la etiqueta del ejercicio.
+   Con eso la web ordena tus puntos débiles y te monta repasos
+   dirigidos, en vez de repetir lo que ya te sale bien.
+   ========================================================= */
+
+var TAG_NAMES = (window.CURRICULUM && window.CURRICULUM.tagNames) || {};
+var DAY_TAGS  = (window.CURRICULUM && window.CURRICULUM.dayTags)  || {};
+
+/* Precedencia: lo que diga el ejercicio, luego lo que diga su
+   contenedor (parte de examen o bloque), y por último su día. */
+function tagsOf(ex, day, fallback) {
+  if (ex && isArr(ex.tags) && ex.tags.length) return ex.tags;
+  if (isArr(fallback) && fallback.length) return fallback;
+  if (day && isArr(DAY_TAGS[day]) && DAY_TAGS[day].length) return DAY_TAGS[day];
+  return [];
+}
+
+function recordTags(tags, ok) {
+  if (!isArr(tags) || !tags.length) return;
+  if (!S.tags) S.tags = {};
+  for (var i = 0; i < tags.length; i++) {
+    var t = tags[i];
+    if (!TAG_NAMES[t]) continue;              /* etiqueta desconocida: se ignora */
+    if (!S.tags[t]) S.tags[t] = { right: 0, wrong: 0 };
+    S.tags[t][ok ? 'right' : 'wrong']++;
+  }
+}
+
+function tagName(t) { return TAG_NAMES[t] || t; }
+
+/* Etiquetas ordenadas de peor a mejor, con un mínimo de intentos
+   para no llamar «punto débil» a un solo fallo suelto. */
+function weakTags(minimo) {
+  minimo = minimo || 4;
+  var out = [];
+  for (var t in S.tags) {
+    if (!S.tags.hasOwnProperty(t) || !TAG_NAMES[t]) continue;
+    var d = S.tags[t];
+    var total = (d.right || 0) + (d.wrong || 0);
+    if (total < minimo) continue;
+    out.push({ tag: t, name: tagName(t), right: d.right || 0, wrong: d.wrong || 0,
+               total: total, pct: Math.round((d.right || 0) / total * 100) });
+  }
+  out.sort(function (a, b) { return a.pct - b.pct || b.wrong - a.wrong; });
+  return out;
+}
+
+/* Etiquetas con muestra insuficiente: aún no se puede opinar */
+function thinTags(minimo) {
+  minimo = minimo || 4;
+  var out = [];
+  for (var t in S.tags) {
+    if (!S.tags.hasOwnProperty(t) || !TAG_NAMES[t]) continue;
+    var d = S.tags[t];
+    if ((d.right || 0) + (d.wrong || 0) < minimo) out.push(t);
+  }
+  return out;
+}
+
+/* Fallos guardados que pertenecen a una etiqueta */
+function missedByTag(tag) {
+  return S.missed.filter(function (m) {
+    return isArr(m.tags) && m.tags.indexOf(tag) !== -1;
+  });
+}
 
 function doneCount() { var c = 0; for (var k in S.done) if (S.done.hasOwnProperty(k)) c++; return c; }
 
@@ -775,10 +862,10 @@ function missedId(day, ex) {
   return day + ':' + h;
 }
 
-function addMissed(day, ex, label) {
+function addMissed(day, ex, label, tags) {
   var id = missedId(day, ex);
   for (var i = 0; i < S.missed.length; i++) if (S.missed[i].id === id) return;
-  S.missed.push({ id: id, day: day, label: label || null, ex: ex });
+  S.missed.push({ id: id, day: day, label: label || null, tags: tags || [], ex: ex });
   if (S.missed.length > MISSED_CAP) S.missed = S.missed.slice(S.missed.length - MISSED_CAP);
 }
 
@@ -2667,16 +2754,38 @@ function viewMap() {
   left.appendChild(h1);
   head.appendChild(left);
 
-  var right = el('div', 'btn-row');
-  if (S.missed.length) {
-    right.appendChild(button('Repasar fallos (' + Math.min(20, S.missed.length) + ')', 'btn--ghost', function () { goto('#/review'); }));
-  }
-  head.appendChild(right);
   v.appendChild(head);
 
   v.appendChild(el('p', 'lede', 'Cada ejercicio te enseña la frase que dirías traduciendo del español, tachada, junto a la que se dice de verdad. Al final del recorrido, cuatro simulacros del Cambridge B2 First.'));
 
   if (EXAM_PLAN.length) v.appendChild(bannerSimulacros());
+
+  /* Herramientas de repaso, arriba y a la vista: son lo que se usa
+     a diario, no algo que haya que ir a buscar al pie de la página. */
+  var flojos = weakTags(4);
+  if (flojos.length || S.missed.length) {
+    var tools = el('div', 'tools');
+    if (flojos.length) {
+      var peor = flojos[0];
+      var t1 = el('button', 'tool');
+      t1.type = 'button';
+      t1.appendChild(el('span', 'tool__label', 'Puntos débiles'));
+      t1.appendChild(el('span', 'tool__value', peor.name));
+      t1.appendChild(el('span', 'tool__meta', 'lo peor ahora mismo · ' + peor.pct + '% de aciertos'));
+      t1.addEventListener('click', function () { goto('#/weak'); });
+      tools.appendChild(t1);
+    }
+    if (S.missed.length) {
+      var t2 = el('button', 'tool');
+      t2.type = 'button';
+      t2.appendChild(el('span', 'tool__label', 'Cuaderno de fallos'));
+      t2.appendChild(el('span', 'tool__value', S.missed.length + (S.missed.length === 1 ? ' ejercicio' : ' ejercicios')));
+      t2.appendChild(el('span', 'tool__meta', 'se repasan de 20 en 20'));
+      t2.addEventListener('click', function () { goto('#/review'); });
+      tools.appendChild(t2);
+    }
+    v.appendChild(tools);
+  }
 
   var dn = doneCount();
   var prog = el('div', 'progress');
@@ -2972,6 +3081,46 @@ function viewExam(id) {
     });
     slot.appendChild(lista);
 
+    /* Nota global cuando están las siete partes: en el examen real
+       la nota sale del total de aciertos, no de la media de partes. */
+    var hechas = 0, aciertos = 0, preguntas = 0;
+    ex.parts.forEach(function (part) {
+      var reg = examScore(id, part.n);
+      if (!reg) return;
+      hechas++;
+      aciertos += reg.right || 0;
+      preguntas += reg.total || 0;
+    });
+
+    if (hechas === ex.parts.length && preguntas) {
+      var global = Math.round(aciertos / preguntas * 100);
+      var caja = el('div', 'examtotal' + (global >= 60 ? ' is-pass' : ''));
+      caja.appendChild(el('p', 'examtotal__label', 'Papel completo'));
+      caja.appendChild(el('p', 'examtotal__pct', global + '%'));
+      caja.appendChild(el('p', 'examtotal__meta', aciertos + ' de ' + preguntas + ' preguntas · ' +
+        (global >= 60 ? 'por encima del 60% que marca el aprobado' : 'el aprobado está en el 60%')));
+      slot.appendChild(caja);
+
+      var flojas = ex.parts.map(function (part) {
+        var reg = examScore(id, part.n);
+        return { n: part.n, title: part.title, score: reg ? reg.score : 0 };
+      }).filter(function (x) { return x.score < 60; }).sort(function (a, b) { return a.score - b.score; });
+
+      if (flojas.length) {
+        var av = el('p', 'muted');
+        av.style.margin = '0 0 1.4rem';
+        av.textContent = 'Las partes que hay que trabajar: ' +
+          flojas.map(function (x) { return 'parte ' + x.n + ' (' + x.score + '%)'; }).join(', ') + '.';
+        slot.appendChild(av);
+      }
+    } else if (hechas) {
+      var parcial = el('p', 'muted');
+      parcial.style.margin = '0 0 1.4rem';
+      parcial.textContent = hechas + ' de ' + ex.parts.length + ' partes hechas · ' +
+        aciertos + ' de ' + preguntas + ' preguntas acertadas hasta ahora.';
+      slot.appendChild(parcial);
+    }
+
     var siguiente = 0;
     for (var k = 0; k < ex.parts.length; k++) if (!examScore(id, ex.parts[k].n)) { siguiente = k; break; }
 
@@ -3013,7 +3162,9 @@ function viewExamPart(id, idx) {
         marcador.className = 'lesson__count exam__live' + (ok ? ' is-hit' : ' is-miss');
         var gan = ok ? 10 : 2;
         S.xp += gan;
-        if (!ok && exNotebook) addMissed(0, exNotebook, (ex.paper || 'Simulacro') + ' · parte ' + part.n);
+        var etiquetas = tagsOf(exNotebook, 0, part.tags);
+        recordTags(etiquetas, ok);
+        if (!ok && exNotebook) addMissed(0, exNotebook, (ex.paper || 'Simulacro') + ' · parte ' + part.n, etiquetas);
         commit();
         feedback(ok, gan);
       },
@@ -3065,6 +3216,105 @@ function tituloExamen(s) {
   if (s >= 60) return 'Aprobado, pero justo.';
   if (s >= 45) return 'Todavía no llega.';
   return 'Esta parte hay que trabajarla entera.';
+}
+
+/* =========================================================
+   10c. Pantalla: puntos débiles
+
+   No es una lista de fallos: es una lista de temas ordenados
+   por lo mal que se te dan, con la práctica dirigida al lado.
+   ========================================================= */
+
+function viewWeak() {
+  var v = view('weak');
+  v.appendChild(el('p', 'eyebrow', 'Diagnóstico'));
+  var h = el('h1', 'map__title');
+  h.innerHTML = 'Lo que se te <em>sigue escapando.</em>';
+  v.appendChild(h);
+  v.appendChild(el('p', 'lede', 'Cada respuesta, en las lecciones y en los simulacros, cuenta en el tema que mide. Esta lista sale de ahí: está ordenada de lo peor a lo mejor, y solo aparece un tema cuando hay respuestas suficientes para poder decir algo.'));
+
+  var flojos = weakTags(4);
+  var pocos = thinTags(4);
+
+  if (!flojos.length) {
+    var e = el('div', 'empty');
+    e.appendChild(el('h3', null, 'Todavía no hay datos suficientes'));
+    var p = el('p');
+    p.innerHTML = pocos.length
+      ? 'Has empezado a dejar rastro en ' + pocos.length + ' ' + (pocos.length === 1 ? 'tema' : 'temas') +
+        ', pero hacen falta al menos cuatro respuestas en uno para que la media signifique algo. Haz un día o una parte de simulacro y vuelve.'
+      : 'Haz una lección o una parte de un simulacro y aquí aparecerá en qué fallas de verdad.';
+    e.appendChild(p);
+    v.appendChild(e);
+    var r0 = el('div', 'btn-row');
+    r0.appendChild(button('Volver al mapa', 'btn--primary', function () { goto('#/map'); }));
+    v.appendChild(r0);
+    mount(v);
+    return;
+  }
+
+  var lista = el('div', 'weak');
+  flojos.forEach(function (t, i) {
+    var pendientes = missedByTag(t.tag).length;
+
+    var fila = el('div', 'weakrow' + (i === 0 && t.pct < 70 ? ' is-worst' : ''));
+
+    var cab = el('div', 'weakrow__head');
+    cab.appendChild(el('span', 'weakrow__name', t.name));
+    var pct = el('span', 'weakrow__pct', t.pct + '%');
+    if (t.pct < 50) pct.className = 'weakrow__pct is-bad';
+    else if (t.pct < 75) pct.className = 'weakrow__pct is-mid';
+    else pct.className = 'weakrow__pct is-ok';
+    cab.appendChild(pct);
+    fila.appendChild(cab);
+
+    var barra = el('div', 'weakbar');
+    var relleno = el('div', 'weakbar__fill');
+    relleno.style.width = t.pct + '%';
+    if (t.pct < 50) relleno.className = 'weakbar__fill is-bad';
+    else if (t.pct < 75) relleno.className = 'weakbar__fill is-mid';
+    barra.appendChild(relleno);
+    fila.appendChild(barra);
+
+    var pie = el('div', 'weakrow__foot');
+    pie.appendChild(el('span', 'weakrow__meta',
+      t.right + ' de ' + t.total + ' bien · ' + t.wrong + (t.wrong === 1 ? ' fallo' : ' fallos')));
+
+    if (pendientes) {
+      var b = button('Practicar (' + pendientes + ')', 'btn--sm btn--primary', function () { goto('#/practice/' + t.tag); });
+      pie.appendChild(b);
+    } else {
+      pie.appendChild(el('span', 'weakrow__meta muted', 'sin ejercicios pendientes de este tema'));
+    }
+    fila.appendChild(pie);
+    lista.appendChild(fila);
+  });
+  v.appendChild(lista);
+
+  if (pocos.length) {
+    var n = el('p', 'muted');
+    n.style.marginTop = '1.4rem';
+    n.style.fontSize = '.9rem';
+    n.textContent = 'Con muy pocas respuestas todavía, sin valorar: ' +
+      pocos.map(function (t) { return tagName(t); }).join(', ') + '.';
+    v.appendChild(n);
+  }
+
+  var row = el('div', 'btn-row');
+  row.style.marginTop = '2rem';
+  if (S.missed.length) row.appendChild(button('Repasar todo lo fallado (' + Math.min(20, S.missed.length) + ')', 'btn--ghost', function () { goto('#/review'); }));
+  row.appendChild(button('Volver al mapa', 'btn--ghost', function () { goto('#/map'); }));
+  v.appendChild(row);
+
+  mount(v);
+}
+
+/* Repaso dirigido: solo los fallos de un tema concreto. */
+function viewPractice(tag) {
+  var pool = missedByTag(tag);
+  if (!pool.length) { goto('#/weak'); return; }
+  review = { items: pool.slice(0, 20), i: 0, right: 0, wrong: 0, xp: 0, tag: tag };
+  renderReviewStep();
 }
 
 /* =========================================================
@@ -3204,13 +3454,15 @@ function renderStep() {
     focus: null,
     cleanup: null,
     score: function (ok, exForNotebook) {
+      var etiquetas = tagsOf(step.ex, run.day, step.tags);
+      recordTags(etiquetas, ok);
       if (ok) { run.right++; run.xp += 10; }
       else {
         run.wrong++;
         run.xp += 2;
         var target = exForNotebook || step.ex;
         run.missed.push(target);
-        addMissed(run.day, target, run.title);
+        addMissed(run.day, target, run.title, etiquetas);
       }
       if (run.marks[run.i] !== false) run.marks[run.i] = ok;
       /* repinta el punto actual sin volver a montar la pantalla */
@@ -3406,8 +3658,9 @@ function renderReviewStep() {
   v.appendChild(bar);
 
   var host = el('div', 'step');
-  host.appendChild(el('p', 'step__block', 'Cuaderno de fallos · ' +
-    (item.day ? 'del día ' + pad2(item.day) : (item.label || 'simulacro'))));
+  host.appendChild(el('p', 'step__block', review.tag
+    ? 'Práctica dirigida · ' + tagName(review.tag)
+    : 'Cuaderno de fallos · ' + (item.day ? 'del día ' + pad2(item.day) : (item.label || 'simulacro'))));
   v.appendChild(host);
 
   /* El repaso guarda paso a paso: si sales a la mitad, lo repasado
@@ -3420,6 +3673,7 @@ function renderReviewStep() {
       if (ok) review.right++; else review.wrong++;
       review.xp += gained;
       S.xp += gained;
+      recordTags(tagsOf(item.ex, item.day, item.tags), ok);
       dropMissed(item.id);
       commit();
       feedback(ok, gained);
@@ -3445,10 +3699,11 @@ function renderReviewStep() {
 function finishReview() {
   var total = review.right + review.wrong;
   var score = total ? Math.round(review.right / total * 100) : 100;
+  var tag = review.tag || null;
   commit();
 
   var v = view('end');
-  v.appendChild(el('p', 'eyebrow', 'Repaso terminado'));
+  v.appendChild(el('p', 'eyebrow', tag ? 'Práctica de ' + tagName(tag).toLowerCase() : 'Repaso terminado'));
   v.appendChild(el('p', 'end__xp', '+' + review.xp));
   v.appendChild(el('p', 'end__xpl', 'XP'));
   v.appendChild(el('h1', 'end__title', score >= 80 ? 'Eso ya no se te escapa.' : 'Sigue estando verde. Vuelve mañana.'));
@@ -3459,8 +3714,21 @@ function finishReview() {
   line.appendChild(scorebox(String(S.missed.length), 'Siguen pendientes', S.missed.length ? '' : 'scorebox--mint'));
   v.appendChild(line);
 
+  if (tag) {
+    var d = S.tags && S.tags[tag];
+    if (d) {
+      var t = (d.right || 0) + (d.wrong || 0);
+      var p = el('p', 'muted');
+      p.style.marginTop = '1rem';
+      p.textContent = 'Tu media en ' + tagName(tag).toLowerCase() + ' va por ' +
+                      Math.round((d.right || 0) / t * 100) + '%, sobre ' + t + ' respuestas en total.';
+      v.appendChild(p);
+    }
+  }
+
   var row = el('div', 'btn-row');
-  row.appendChild(button('Volver al mapa', 'btn--primary', function () { goto('#/map'); }));
+  if (tag) row.appendChild(button('Ver mis puntos débiles', 'btn--primary', function () { goto('#/weak'); }));
+  row.appendChild(button('Volver al mapa', tag ? 'btn--ghost' : 'btn--primary', function () { goto('#/map'); }));
   v.appendChild(row);
 
   review = null;
@@ -3493,6 +3761,8 @@ function route() {
     return;
   }
   if (what === 'review') { viewReview(); return; }
+  if (what === 'weak') { viewWeak(); return; }
+  if (what === 'practice' && parts[1]) { viewPractice(parts[1]); return; }
   if (what === 'exams') { viewExams(); return; }
   if (what === 'exam' && parts[1]) {
     if (parts[2] !== undefined && parts[2] !== '') viewExamPart(parts[1], parseInt(parts[2], 10) || 0);

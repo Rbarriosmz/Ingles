@@ -18,7 +18,7 @@ REGISTER_EXAM({
      Part 1 · Multiple-choice cloze · 8 huecos
      Mide vocabulario: colocaciones, phrasal verbs y matices.
      --------------------------------------------------------- */
-  { n:1, type:"cloze", count:8,
+  { n:1, type:"cloze", count:8, tags:["collocation"],
     title:"Multiple-choice cloze",
     instructions:"Lee el texto y elige la palabra que mejor encaja en cada hueco. Se mide vocabulario: colocaciones y matices entre palabras parecidas.",
     heading:"The return of the night train",
@@ -51,7 +51,7 @@ REGISTER_EXAM({
      Part 2 · Open cloze · 8 huecos
      Mide gramática: una sola palabra, casi siempre funcional.
      --------------------------------------------------------- */
-  { n:2, type:"opencloze", count:8,
+  { n:2, type:"opencloze", count:8, tags:["function-word"],
     title:"Open cloze",
     instructions:"Escribe UNA sola palabra en cada hueco. Casi siempre es una palabra gramatical: preposición, artículo, auxiliar, relativo o conjunción.",
     heading:"Why adults learn to cook",
@@ -83,7 +83,7 @@ REGISTER_EXAM({
   /* ---------------------------------------------------------
      Part 3 · Word formation · 8 huecos
      --------------------------------------------------------- */
-  { n:3, type:"wordform", count:8,
+  { n:3, type:"wordform", count:8, tags:["word-formation"],
     title:"Word formation",
     instructions:"Transforma la palabra base para que encaje en el hueco. Fíjate en si hace falta un sustantivo, un adjetivo, un adverbio o un negativo.",
     heading:"The quiet power of boredom",
@@ -115,7 +115,7 @@ REGISTER_EXAM({
   /* ---------------------------------------------------------
      Part 4 · Key word transformations · 6 frases
      --------------------------------------------------------- */
-  { n:4, type:"transform", count:6,
+  { n:4, type:"transform", count:6, tags:["transform"],
     title:"Key word transformations",
     instructions:"Reescribe la segunda frase para que signifique lo mismo que la primera. Usa la palabra clave sin cambiarla y escribe entre DOS y CINCO palabras.",
     items:[
@@ -160,7 +160,7 @@ REGISTER_EXAM({
   /* ---------------------------------------------------------
      Part 5 · Multiple choice reading · 6 preguntas
      --------------------------------------------------------- */
-  { n:5, type:"reading", count:6,
+  { n:5, type:"reading", count:6, tags:["reading-infer"],
     title:"Multiple choice",
     heading:"Reading Part 5",
     instructions:"Lee el texto y elige la mejor respuesta. Los distractores están apoyados en el texto: casi todos repiten palabras que aparecen en él.",
@@ -250,7 +250,7 @@ REGISTER_EXAM({
   /* ---------------------------------------------------------
      Part 6 · Gapped text · 6 huecos, 7 frases (sobra una)
      --------------------------------------------------------- */
-  { n:6, type:"gappedtext", count:6,
+  { n:6, type:"gappedtext", count:6, tags:["reading-cohesion"],
     title:"Gapped text",
     instructions:"Coloca la frase que encaja en cada hueco. Hay siete frases y seis huecos: una sobra. Fíjate en los pronombres y los conectores, que son las costuras que unen una frase con la anterior y con la siguiente.",
     heading:"The woman who drew the ocean floor",
@@ -288,7 +288,7 @@ REGISTER_EXAM({
   /* ---------------------------------------------------------
      Part 7 · Multiple matching · 10 preguntas, 4 secciones
      --------------------------------------------------------- */
-  { n:7, type:"matching", count:10,
+  { n:7, type:"matching", count:10, tags:["reading-detail"],
     title:"Multiple matching",
     instructions:"Cuatro personas que cambiaron de profesión pasados los cuarenta. Decide en qué sección se dice cada cosa. Lo que se busca no es la palabra repetida sino la idea reformulada.",
     heading:"Starting again at forty",
