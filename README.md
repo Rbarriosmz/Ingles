@@ -13,6 +13,7 @@ HTML, CSS y JavaScript vanilla. Sin frameworks, sin build, sin npm, sin dependen
 
 ## Índice
 
+- [Cuentas y acceso](#cuentas-y-acceso)
 - [Cómo probarlo en local](#cómo-probarlo-en-local)
 - [Cómo publicarlo](#cómo-publicarlo)
 - [Estructura de archivos](#estructura-de-archivos)
@@ -21,6 +22,58 @@ HTML, CSS y JavaScript vanilla. Sin frameworks, sin build, sin npm, sin dependen
 - [XP, racha, trofeos y cuaderno de fallos](#xp-racha-trofeos-y-cuaderno-de-fallos)
 - [Dónde vive tu progreso](#dónde-vive-tu-progreso)
 - [Compatibilidad y accesibilidad](#compatibilidad-y-accesibilidad)
+
+---
+
+## Cuentas y acceso
+
+La web pide usuario y contraseña, y **cada cuenta guarda su propio progreso**: su XP, su racha, sus trofeos y su cuaderno de fallos, por separado.
+
+### Qué es esto y qué no es
+
+> **Esto no es un sistema de seguridad.**
+>
+> La web es estática: no hay servidor, así que la contraseña se comprueba en el navegador de quien entra, con código que cualquiera puede leer. Quien abra las herramientas de desarrollo se lo salta en un minuto, y el repositorio es público.
+>
+> Sirve para lo que sirve: **separar dos perfiles de progreso** y evitar que alguien entre por accidente. No metas aquí nada que te importe de verdad y no reutilices una contraseña que uses en otro sitio.
+
+Lo que sí se ha hecho, dentro de esos límites:
+
+- Las contraseñas **no están en claro** en ningún archivo. En `data/users.js` solo hay el SHA-256 con sal, iterado 12.000 veces.
+- El mensaje de error es el mismo para «ese usuario no existe» y «esa contraseña es incorrecta», así que no se puede sondear qué cuentas hay.
+- La comparación de hashes es en tiempo constante.
+- Sin sesión no se llega a ninguna pantalla, ni siquiera pegando un enlace directo como `#/lesson/3`.
+
+El SHA-256 está implementado a mano en `assets/auth.js` en lugar de usar `crypto.subtle` porque esa API no existe sobre `file://`, y la web tiene que seguir funcionando al abrir `index.html` con doble clic. La implementación está verificada contra los vectores oficiales del NIST y contra `crypto.subtle`.
+
+### Cambiar una contraseña o añadir una cuenta
+
+1. Abre la web y pulsa **F12** para ver la consola.
+2. Escribe:
+
+```js
+LT_AUTH.hash("la-contraseña-nueva")
+```
+
+3. Copia la cadena de 64 caracteres que devuelve.
+4. Pégala en el campo `hash` de la cuenta correspondiente, en `data/users.js`.
+5. Guarda, `git commit` y `git push`.
+
+Para añadir una cuenta, copia un bloque de la lista y cámbiale el `id`, el `name` y el `hash`. No hay que tocar `app.js` ni `index.html`.
+
+```js
+{ id: "ana",
+  name: "Ana",
+  hash: "…64 caracteres…" }
+```
+
+Si cambias `salt` o `rounds`, **todos** los hashes existentes dejan de valer y hay que regenerarlos.
+
+Cuidado con el `id`: es lo que decide dónde se guarda el progreso (`latrampa.v1.<id>`). Cambiárselo a una cuenta existente equivale a empezar de cero, porque el progreso anterior sigue guardado bajo el id viejo pero deja de leerse.
+
+### Subir o bajar el coste del hash
+
+`rounds` en `data/users.js` decide cuánto cuesta comprobar una contraseña. Está en 12.000, que son unos 240 ms en un portátil y menos de un segundo en un móvil lento. Subirlo encarece un ataque por diccionario contra el hash publicado, pero también hace más lento cada inicio de sesión.
 
 ---
 
@@ -74,11 +127,15 @@ No hay ninguna clave de API en el proyecto y no hace falta ninguna: el audio lo 
 index.html            cáscara: barra superior + contenedor #app + carga de scripts
 assets/styles.css     todos los estilos
 assets/app.js         motor: navegación, estado, XP, racha, tipos de ejercicio
+assets/auth.js        acceso: SHA-256, derivación de la contraseña y sesión
 data/curriculum.js    plan de 60 días, 9 semanas y definición de trofeos
+data/users.js         cuentas: id, nombre y hash de la contraseña
 data/day-01.js        contenido de la lección 1
 data/day-02.js        …
 README.md             este archivo
 ```
+
+`index.html` los carga en este orden, que importa: `curriculum.js` → `users.js` → `auth.js` → `app.js`.
 
 La regla de oro del diseño: **añadir una lección nueva consiste en crear un archivo en `data/` y nada más.** Si para añadir el día 27 hubiera que tocar `app.js` o `index.html`, el diseño estaría mal.
 
@@ -301,7 +358,15 @@ Cada ejercicio fallado se guarda. Desde el mapa hay un botón para repasar los �
 
 ## Dónde vive tu progreso
 
-En **`localStorage`, en tu navegador, en tu dispositivo**, bajo la clave `latrampa.v1`:
+En **`localStorage`, en tu navegador, en tu dispositivo**, con una clave por cuenta:
+
+| Clave | Qué guarda |
+|---|---|
+| `latrampa.v1.adm1` | el progreso de adm1 |
+| `latrampa.v1.adm2` | el progreso de adm2 |
+| `latrampa.session` | qué cuenta tiene la sesión abierta |
+
+El contenido de cada clave de progreso:
 
 ```js
 { done:{ 1:{score:87, xp:145, date:"2026-08-10"} },
@@ -310,12 +375,13 @@ En **`localStorage`, en tu navegador, en tu dispositivo**, bajo la clave `latram
 
 Consecuencias, para que no haya sorpresas:
 
-- **No hay cuenta ni sincronización.** Si empiezas en el móvil y sigues en el portátil, el progreso no viaja: son dos progresos distintos.
-- Borrar los datos del navegador borra el progreso.
+- **Las cuentas separan perfiles, no sincronizan nada.** Si adm1 empieza en el móvil y sigue en el portátil, el progreso no viaja: son dos progresos distintos con el mismo usuario.
+- Borrar los datos del navegador borra el progreso de las dos cuentas.
+- Cerrar sesión **no** borra nada: el progreso sigue ahí y vuelve al entrar otra vez.
 - En navegación privada dura lo que dure la ventana.
 - Si el navegador tiene el almacenamiento bloqueado, la web **no se rompe**: el estado pasa a memoria, avisa en el mapa y el progreso se pierde al cerrar la pestaña.
 
-El botón **Reiniciar** del mapa borra todo: progreso, XP, racha, trofeos y cuaderno de fallos. Pide confirmación.
+El botón **Reiniciar** del mapa borra progreso, XP, racha, trofeos y cuaderno de fallos **de la cuenta que tenga la sesión abierta**. La otra cuenta no se toca. Pide confirmación.
 
 ---
 

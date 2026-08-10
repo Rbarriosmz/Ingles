@@ -9,10 +9,23 @@
 'use strict';
 
 /* =========================================================
+   0. Acceso
+   Vive en assets/auth.js. Lee la cabecera de ese archivo antes
+   de dar por hecho que esto protege algo: es una cerradura para
+   separar perfiles, no seguridad.
+   ========================================================= */
+
+var Auth = window.LT_AUTH;
+
+/* =========================================================
    1. Almacenamiento: localStorage con fallback a memoria
    ========================================================= */
 
-var KEY = 'latrampa.v1';
+/* El progreso de cada cuenta vive en su propia clave:
+   latrampa.v1.adm1, latrampa.v1.adm2… KEY se fija al abrir sesión.
+   latrampa.v1 a secas es la clave antigua, de antes del login. */
+var LEGACY_KEY = 'latrampa.v1';
+var KEY = null;
 
 var DEFAULTS = { done:{}, xp:0, streak:0, last:null, missed:[], trophies:[] };
 
@@ -43,7 +56,7 @@ function normalizeState(raw) {
 }
 
 function loadState() {
-  if (storageOK) {
+  if (storageOK && KEY) {
     try {
       var raw = window.localStorage.getItem(KEY);
       if (raw) return normalizeState(JSON.parse(raw));
@@ -57,7 +70,7 @@ function loadState() {
 
 function saveState(s) {
   memory = s;
-  if (!storageOK) return false;
+  if (!storageOK || !KEY) return false;
   try {
     window.localStorage.setItem(KEY, JSON.stringify(s));
     return true;
@@ -70,9 +83,42 @@ function saveState(s) {
   }
 }
 
-var S = loadState();
+var S = normalizeState(null);   /* vacío hasta que se abre sesión */
 
 function commit() { saveState(S); paintStats(); }
+
+/* Progreso de antes de que hubiera login: lo adopta la primera
+   cuenta que entre, y después se retira la clave vieja para que
+   no vuelva a aplicarse a la segunda. */
+function adoptLegacyProgress() {
+  if (!storageOK || !KEY) return;
+  try {
+    var legacy = window.localStorage.getItem(LEGACY_KEY);
+    if (!legacy) return;
+    if (!window.localStorage.getItem(KEY)) window.localStorage.setItem(KEY, legacy);
+    window.localStorage.removeItem(LEGACY_KEY);
+  } catch (e) {}
+}
+
+function openSession(user) {
+  KEY = 'latrampa.v1.' + user.id;
+  memory = null;
+  adoptLegacyProgress();
+  S = loadState();
+  paintSession();
+  paintStats();
+}
+
+function closeSession() {
+  Auth.logout();
+  KEY = null;
+  memory = null;
+  S = normalizeState(null);
+  run = null;
+  review = null;
+  dayCache = {};
+  paintSession();
+}
 
 /* =========================================================
    2. Utilidades
@@ -258,6 +304,29 @@ function mount(node) {
   app.innerHTML = '';
   app.appendChild(node);
   window.scrollTo(0, 0);
+}
+
+function paintSession() {
+  var user = Auth ? Auth.current() : null;
+  var stats = document.getElementById('stats');
+  var box = document.getElementById('session');
+  var who = document.getElementById('session-who');
+  var out = document.getElementById('session-out');
+
+  if (stats) stats.hidden = !user;
+  if (box) box.hidden = !user;
+  if (who) who.textContent = user ? user.name : '';
+  if (out && !out.__wired) {
+    out.__wired = true;
+    out.addEventListener('click', function () {
+      var u = Auth.current();
+      if (!u) return;
+      if (!window.confirm('¿Cerrar la sesión de ' + u.name + '?\n\nEl progreso se queda guardado en este dispositivo y vuelve al entrar otra vez.')) return;
+      closeSession();
+      if (location.hash && location.hash !== '#') location.hash = '';
+      else viewLogin();
+    });
+  }
 }
 
 function paintStats() {
@@ -1072,6 +1141,102 @@ RENDER.writing = function (ex, ctx) {
 };
 
 /* =========================================================
+   9b. Pantalla: acceso
+   ========================================================= */
+
+function viewLogin(prefill) {
+  var v = view('login');
+  var card = el('div', 'login');
+
+  card.appendChild(el('p', 'eyebrow', 'Acceso'));
+  card.appendChild(el('h1', 'login__title', 'La Trampa'));
+  card.appendChild(el('p', 'login__lede', 'Cada cuenta guarda su propio progreso, su XP y su racha.'));
+
+  var form = document.createElement('form');
+  form.className = 'login__form';
+  form.setAttribute('novalidate', 'novalidate');
+
+  function field(id, label, type, autocomplete) {
+    var wrap = el('div', 'field');
+    var l = el('label', 'field__l', label);
+    l.setAttribute('for', id);
+    var i = el('input', 'field__i');
+    i.type = type;
+    i.id = id;
+    i.name = autocomplete;
+    i.setAttribute('autocomplete', autocomplete);
+    i.setAttribute('autocapitalize', 'off');
+    i.setAttribute('autocorrect', 'off');
+    i.setAttribute('spellcheck', 'false');
+    wrap.appendChild(l);
+    wrap.appendChild(i);
+    form.appendChild(wrap);
+    return i;
+  }
+
+  var userInput = field('login-user', 'Usuario', 'text', 'username');
+  var passInput = field('login-pass', 'Contraseña', 'password', 'current-password');
+  if (prefill) userInput.value = prefill;
+
+  var msg = el('p', 'login__msg');
+  msg.setAttribute('role', 'alert');
+  form.appendChild(msg);
+
+  var go = el('button', 'btn btn--primary login__go', 'Entrar');
+  go.type = 'submit';
+  form.appendChild(go);
+
+  card.appendChild(form);
+  card.appendChild(el('p', 'login__note',
+    'Acceso local, sin servidor: separa perfiles en este dispositivo. El progreso se guarda en este navegador, así que desde otro equipo se empieza de cero.'));
+
+  v.appendChild(card);
+
+  function fail(text) {
+    msg.textContent = text;
+    msg.className = 'login__msg is-bad';
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    msg.textContent = '';
+    msg.className = 'login__msg';
+
+    if (!userInput.value.trim() || !passInput.value) {
+      fail('Rellena usuario y contraseña.');
+      (userInput.value.trim() ? passInput : userInput).focus();
+      return;
+    }
+
+    /* Derivar la contraseña bloquea el hilo unas décimas de segundo,
+       así que dejamos que el navegador pinte el estado antes. */
+    go.disabled = true;
+    go.textContent = 'Comprobando…';
+
+    setTimeout(function () {
+      var r = Auth.login(userInput.value, passInput.value);
+      go.disabled = false;
+      go.textContent = 'Entrar';
+
+      if (!r.ok) {
+        /* mismo mensaje para usuario inexistente y contraseña mala */
+        fail('Usuario o contraseña incorrectos.');
+        passInput.value = '';
+        passInput.focus();
+        return;
+      }
+
+      openSession(r.user);
+      route();
+    }, 30);
+  });
+
+  mount(v);
+  paintSession();
+  setTimeout(function () { (prefill ? passInput : userInput).focus(); }, 60);
+}
+
+/* =========================================================
    10. Pantalla: mapa
    ========================================================= */
 
@@ -1584,6 +1749,10 @@ function finishReview() {
    ========================================================= */
 
 function route() {
+  /* sin sesión no se llega a ninguna pantalla */
+  if (!Auth || !Auth.current()) { viewLogin(); return; }
+  if (!KEY) openSession(Auth.current());
+
   var h = String(location.hash || '').replace(/^#\/?/, '');
   var parts = h.split('/');
   var what = parts[0] || 'map';
@@ -1617,8 +1786,15 @@ if (!DAYS.length) {
   app.innerHTML = '<div class="empty"><h3>Falta el currículo</h3>' +
     '<p>No se ha podido cargar <code>data/curriculum.js</code>. ' +
     'Comprueba que el archivo existe y que <code>index.html</code> lo carga antes que <code>assets/app.js</code>.</p></div>';
+} else if (!Auth || !Auth.count()) {
+  app.innerHTML = '<div class="empty"><h3>Faltan las cuentas</h3>' +
+    '<p>No se ha podido cargar <code>data/users.js</code> o <code>assets/auth.js</code>, ' +
+    'o la lista de cuentas está vacía. <code>index.html</code> tiene que cargar los dos ' +
+    'antes que <code>assets/app.js</code>.</p></div>';
 } else {
-  paintStats();
+  var session = Auth.current();
+  if (session) openSession(session);
+  else paintSession();
   route();
 }
 

@@ -24,18 +24,24 @@
       <span class="brand__sub">B1 → B2 · 60 días</span>
     </span>
   </a>
-  <div class="stats" id="stats">
-    <div class="stat">
-      <span class="stat__n" id="stat-xp">0</span>
-      <span class="stat__l">XP</span>
+  <div class="topbar__right">
+    <div class="stats" id="stats" hidden>
+      <div class="stat">
+        <span class="stat__n" id="stat-xp">0</span>
+        <span class="stat__l">XP</span>
+      </div>
+      <div class="stat">
+        <span class="stat__n" id="stat-streak">0</span>
+        <span class="stat__l">Racha</span>
+      </div>
+      <div class="stat">
+        <span class="stat__n" id="stat-done">0<span class="stat__of">/60</span></span>
+        <span class="stat__l">Días</span>
+      </div>
     </div>
-    <div class="stat">
-      <span class="stat__n" id="stat-streak">0</span>
-      <span class="stat__l">Racha</span>
-    </div>
-    <div class="stat">
-      <span class="stat__n" id="stat-done">0<span class="stat__of">/60</span></span>
-      <span class="stat__l">Días</span>
+    <div class="session" id="session" hidden>
+      <span class="session__who" id="session-who"></span>
+      <button type="button" class="session__out" id="session-out">Salir</button>
     </div>
   </div>
 </header>
@@ -49,6 +55,8 @@
 </noscript>
 
 <script src="data/curriculum.js"></script>
+<script src="data/users.js"></script>
+<script src="assets/auth.js"></script>
 <script src="assets/app.js"></script>
 
 </body>
