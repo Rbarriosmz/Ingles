@@ -512,6 +512,12 @@ window.REGISTER_LOCAL_EXAM = function (plan, exam) {
 };
 
 function cargaContenidoLocal(cb) {
+  /* En el sitio publicado este archivo no existe y no puede existir,
+     así que ni se pide: solo dejaría un 404 en la consola. Se busca
+     en cualquier otro sitio, incluido un servidor de tu red local
+     para usarlo desde la tablet. */
+  if (/\.github\.io$/i.test(location.hostname)) { cb(false); return; }
+
   var s = document.createElement('script');
   s.src = 'data/local.js';
   s.async = false;
