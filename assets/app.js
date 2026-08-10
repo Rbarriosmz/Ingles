@@ -244,47 +244,120 @@ function loadDay(n, cb) {
    5. Voz del navegador (listening y modelos de speaking)
    ========================================================= */
 
+/* Tener la API no significa poder hablar: en muchos equipos
+   speechSynthesis existe pero la lista de voces está vacía, y en
+   Chrome llega vacía en la primera llamada y se rellena después.
+   Por eso hay tres estados y no dos: 'checking', 'ready' y 'none'. */
 var Voice = {
-  available: ('speechSynthesis' in window) && typeof window.SpeechSynthesisUtterance === 'function',
+
+  hasApi: ('speechSynthesis' in window) && typeof window.SpeechSynthesisUtterance === 'function',
+  state: 'checking',
   voice: null,
+  listeners: [],
+
   pick: function () {
-    if (!Voice.available) return;
+    if (!Voice.hasApi) { Voice.settle('none'); return; }
+
     var vs = [];
-    try { vs = window.speechSynthesis.getVoices() || []; } catch (e) { return; }
-    var gb = null, en = null;
+    try { vs = window.speechSynthesis.getVoices() || []; } catch (e) { vs = []; }
+    if (!vs.length) return;                 /* aún no han cargado: seguimos esperando */
+
+    var gb = null, en = null, any = null;
     for (var i = 0; i < vs.length; i++) {
       var lang = (vs[i].lang || '').replace('_', '-');
       if (!gb && /^en-GB/i.test(lang)) gb = vs[i];
       if (!en && /^en/i.test(lang)) en = vs[i];
+      if (!any) any = vs[i];
     }
+
+    /* Preferimos británico, luego cualquier inglés. Si el equipo no
+       tiene ninguna voz inglesa no forzamos otra: leer inglés con una
+       voz española no sirve para entrenar el oído. */
     Voice.voice = gb || en || null;
+    Voice.accent = gb ? 'británico' : (en ? acentoDe(en.lang) : null);
+    Voice.settle(Voice.voice ? 'ready' : 'none');
   },
-  speak: function (text, rate, onStart, onEnd) {
-    if (!Voice.available) { if (onEnd) onEnd(); return null; }
+
+  settle: function (s) {
+    if (Voice.state === s) return;
+    Voice.state = s;
+    var l = Voice.listeners;
+    Voice.listeners = [];
+    for (var i = 0; i < l.length; i++) { try { l[i](s); } catch (e) {} }
+  },
+
+  /* llama a cb en cuanto se sepa si hay voz o no */
+  whenReady: function (cb) {
+    if (Voice.state !== 'checking') { cb(Voice.state); return; }
+    Voice.listeners.push(cb);
+  },
+
+  speak: function (text, rate, onStart, onEnd, onFail) {
+    if (Voice.state !== 'ready') { if (onFail) onFail('sin-voz'); if (onEnd) onEnd(); return null; }
     try {
       window.speechSynthesis.cancel();
       var u = new window.SpeechSynthesisUtterance(String(text));
-      u.lang = 'en-GB';
+      /* El idioma se toma de la voz elegida. Forzar en-GB en un equipo
+         que no tiene voz británica hace que algunos navegadores no
+         reproduzcan nada, sin avisar. */
+      u.lang = Voice.voice.lang || 'en-GB';
+      u.voice = Voice.voice;
       u.rate = rate || 1;
       u.pitch = 1;
-      if (Voice.voice) u.voice = Voice.voice;
-      u.onstart = function () { if (onStart) onStart(); };
+      var arrancó = false;
+      u.onstart = function () { arrancó = true; if (onStart) onStart(); };
       u.onend = function () { if (onEnd) onEnd(); };
-      u.onerror = function () { if (onEnd) onEnd(); };
+      u.onerror = function (e) {
+        /* 'interrupted' y 'canceled' los provocamos nosotros al cambiar de paso */
+        var motivo = e && e.error;
+        if (motivo !== 'interrupted' && motivo !== 'canceled' && onFail) onFail(motivo || 'error');
+        if (onEnd) onEnd();
+      };
       window.speechSynthesis.speak(u);
+
+      /* Si en dos segundos no ha arrancado, damos el audio por fallido
+         y enseñamos la transcripción: es preferible a un botón mudo. */
+      setTimeout(function () {
+        if (!arrancó && !window.speechSynthesis.speaking && onFail) onFail('sin-arrancar');
+      }, 2000);
+
       return u;
     } catch (e) {
       console.warn('[La Trampa] speechSynthesis falló:', e);
+      if (onFail) onFail('excepción');
       if (onEnd) onEnd();
       return null;
     }
   },
-  stop: function () { if (Voice.available) { try { window.speechSynthesis.cancel(); } catch (e) {} } }
+
+  stop: function () { if (Voice.hasApi) { try { window.speechSynthesis.cancel(); } catch (e) {} } }
 };
 
-if (Voice.available) {
+function acentoDe(lang) {
+  lang = String(lang || '').toLowerCase();
+  if (lang.indexOf('en-us') === 0) return 'americano';
+  if (lang.indexOf('en-au') === 0) return 'australiano';
+  if (lang.indexOf('en-ie') === 0) return 'irlandés';
+  if (lang.indexOf('en-in') === 0) return 'indio';
+  if (lang.indexOf('en-za') === 0) return 'sudafricano';
+  if (lang.indexOf('en-ca') === 0) return 'canadiense';
+  if (lang.indexOf('en-nz') === 0) return 'neozelandés';
+  return 'inglés';
+}
+
+if (Voice.hasApi) {
   Voice.pick();
   try { window.speechSynthesis.onvoiceschanged = Voice.pick; } catch (e) {}
+  /* Chrome devuelve la lista vacía al principio y a veces no dispara
+     onvoiceschanged. Reintentamos un rato y nos rendimos a los 3 s. */
+  var intentos = 0;
+  var reintento = setInterval(function () {
+    if (Voice.state !== 'checking') { clearInterval(reintento); return; }
+    Voice.pick();
+    if (++intentos >= 12) { clearInterval(reintento); Voice.settle('none'); }
+  }, 250);
+} else {
+  Voice.settle('none');
 }
 
 /* =========================================================
@@ -729,8 +802,13 @@ RENDER.reading = function (ex, ctx) {
 };
 
 /* ---- listening: audio del sintetizador del navegador ---- */
-function playerBox(text, label) {
+function playerBox(text, opts) {
+  opts = opts || {};
+  var outer = el('div');
+  var aviso = el('div');
   var box = el('div', 'player');
+  outer.appendChild(aviso);
+  outer.appendChild(box);
 
   var play = el('button', 'player__play');
   play.type = 'button';
@@ -738,8 +816,9 @@ function playerBox(text, label) {
   play.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 
   var meta = el('div', 'player__meta');
-  meta.appendChild(el('span', 'player__label', label || 'Audio · voz del navegador'));
-  var rateLabel = el('span', 'player__rate', 'Velocidad normal');
+  var mainLabel = el('span', 'player__label', opts.label || 'Audio · voz del navegador');
+  var rateLabel = el('span', 'player__rate', 'Preparando el audio…');
+  meta.appendChild(mainLabel);
   meta.appendChild(rateLabel);
 
   var wave = el('div', 'wave');
@@ -753,26 +832,72 @@ function playerBox(text, label) {
   box.appendChild(wave);
   box.appendChild(slow);
 
+  var caido = false;
+
+  function normal() { return Voice.accent && Voice.accent !== 'británico'
+    ? 'Velocidad normal · acento ' + Voice.accent
+    : 'Velocidad normal'; }
+
   function run(rate) {
-    rateLabel.textContent = rate < 1 ? 'Velocidad lenta · 0.7×' : 'Velocidad normal';
+    if (Voice.state !== 'ready') return;
+    rateLabel.textContent = rate < 1 ? 'Velocidad lenta · 0.7×' : normal();
     Voice.speak(text, rate,
       function () { play.className = 'player__play is-playing'; wave.className = 'wave is-on'; },
-      function () { play.className = 'player__play'; wave.className = 'wave'; }
+      function () { play.className = 'player__play'; wave.className = 'wave'; },
+      caer
     );
+  }
+
+  /* El audio no se puede reproducir: lo decimos claro, explicamos cómo
+     arreglarlo y damos paso a la transcripción para no bloquear el paso. */
+  function caer(motivo) {
+    if (caido) return;
+    caido = true;
+    box.style.display = 'none';
+    aviso.innerHTML = '';
+
+    var n = el('div', 'notice');
+    var titulo = el('p');
+    titulo.style.margin = '0 0 .5rem';
+    titulo.innerHTML = '<b>Este dispositivo no puede reproducir el audio.</b>';
+    n.appendChild(titulo);
+
+    var p = el('p');
+    p.style.margin = '0';
+    p.innerHTML = Voice.hasApi
+      ? 'El navegador tiene sintetizador de voz, pero no hay ninguna <b>voz en inglés</b> instalada en el sistema. ' +
+        'En Windows se añaden en <em>Configuración → Hora e idioma → Idioma y región → Añadir idioma → English</em>, ' +
+        'marcando «Voz». En Android, en <em>Ajustes → Accesibilidad → Salida de texto a voz</em>.'
+      : 'Este navegador no incluye sintetizador de voz. Prueba con Chrome, Edge o Safari.';
+    n.appendChild(p);
+    aviso.appendChild(n);
+
+    if (opts.onUnavailable) opts.onUnavailable(motivo);
   }
 
   play.addEventListener('click', function () { run(1); });
   slow.addEventListener('click', function () { run(0.7); });
 
-  if (!Voice.available) {
-    var warn = el('p', 'notice', 'Este navegador no tiene sintetizador de voz. Puedes leer la transcripción al responder.');
-    var outer = el('div');
-    outer.appendChild(warn);
-    outer.appendChild(box);
-    return { node: outer, play: function () { run(1); } };
-  }
+  /* Hasta saber si hay voz, el botón no promete nada que no pueda cumplir. */
+  play.disabled = true;
+  slow.disabled = true;
 
-  return { node: box, play: function () { run(1); } };
+  Voice.whenReady(function (estado) {
+    if (estado === 'ready') {
+      play.disabled = false;
+      slow.disabled = false;
+      rateLabel.textContent = normal();
+      if (opts.autoplay) run(1);
+    } else {
+      caer('sin-voz');
+    }
+  });
+
+  return {
+    node: outer,
+    play: function () { run(1); },
+    disponible: function () { return !caido && Voice.state === 'ready'; }
+  };
 }
 
 RENDER.listening = function (ex, ctx) {
@@ -781,8 +906,24 @@ RENDER.listening = function (ex, ctx) {
     ? 'Escucha y escribe exactamente lo que oyes'
     : 'Escucha y elige la respuesta correcta'));
 
-  var player = playerBox(ex.audio, 'Audio · escúchalo las veces que quieras');
+  /* Si el audio no se puede reproducir, enseñamos la transcripción:
+     el ejercicio pierde el oído pero no se queda bloqueado. */
+  var respaldo = el('div');
+
+  var player = playerBox(ex.audio, {
+    label: 'Audio · escúchalo las veces que quieras',
+    autoplay: true,
+    onUnavailable: function () {
+      respaldo.innerHTML = '';
+      var caja = el('div', 'note');
+      caja.appendChild(el('p', 'instruction', 'Sin audio · lee la frase en su lugar'));
+      caja.appendChild(el('p', null, ex.audio));
+      respaldo.appendChild(caja);
+    }
+  });
+
   wrap.appendChild(player.node);
+  wrap.appendChild(respaldo);
 
   var after = el('div');
 
@@ -856,7 +997,6 @@ RENDER.listening = function (ex, ctx) {
       if (e.key === 'Enter' && !answered) { e.preventDefault(); submit(); }
       else if (e.key === 'Enter') { e.preventDefault(); ctx.next(); }
     };
-    ctx.focus = function () { player.play(); };
     return wrap;
   }
 
@@ -917,7 +1057,6 @@ RENDER.listening = function (ex, ctx) {
     var i = optionIndexFromKey(e);
     if (i >= 0 && i < buttons.length) { e.preventDefault(); answer(i); }
   };
-  ctx.focus = function () { player.play(); };
 
   return wrap;
 };
@@ -1044,7 +1183,18 @@ RENDER.speaking = function (ex, ctx) {
     var m = el('div', 'model');
     m.appendChild(el('p', 'model__label', 'Respuesta modelo'));
     m.appendChild(el('p', 'model__text', ex.model));
-    var listen = button('Escucharla', 'btn--sm btn--ghost', function () { Voice.speak(ex.model, 1); });
+    var listen = button('Escucharla', 'btn--sm btn--ghost', function () {
+      Voice.speak(ex.model, 1, null, null, function () {
+        listen.disabled = true;
+        listen.textContent = 'Sin voz en inglés en este equipo';
+      });
+    });
+    Voice.whenReady(function (estado) {
+      if (estado !== 'ready') {
+        listen.disabled = true;
+        listen.textContent = 'Sin voz en inglés en este equipo';
+      }
+    });
     m.appendChild(listen);
     after.appendChild(m);
 
