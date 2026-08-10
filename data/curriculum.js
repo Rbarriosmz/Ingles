@@ -181,8 +181,8 @@ window.CURRICULUM = {
     { id:'ruoe-1', file:'exam-ruoe-1.js',
       paper:'Reading & Use of English',
       title:'Prueba 1',
-      parts:5, questions:36, minutes:75,
-      focus:'Las cinco primeras partes del papel 1 del B2 First, con el mismo número de preguntas y el mismo tipo de distractor que el examen real. Se corrige sobre la marcha.' }
+      parts:7, questions:52, minutes:75,
+      focus:'El papel 1 completo del B2 First: las siete partes, 52 preguntas, con el mismo reparto y el mismo tipo de distractor que el examen real. Se corrige sobre la marcha, pregunta a pregunta.' }
   ],
 
   trophies: [

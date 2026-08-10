@@ -2073,6 +2073,260 @@ RENDER.transform = function (ex, ctx) {
   return wrap;
 };
 
+/* ---- Part 6: gapped text ----
+   Seis huecos en el texto y siete frases para colocar: sobra una.
+   Las pistas son de costura: pronombres, conectores y referencias
+   que tienen que encajar con lo de antes y con lo de después. */
+RENDER.gappedtext = function (ex, ctx) {
+  var wrap = el('div');
+  if (ex.instructions) wrap.appendChild(el('p', 'instruction', ex.instructions));
+  if (ex.heading) wrap.appendChild(el('h2', 'reading__title', ex.heading));
+
+  var box = el('div', 'reading__text examtext');
+  var slots = [];
+  textoConHuecos(box, ex.text, slots);
+  wrap.appendChild(box);
+
+  var zone = el('div');
+  wrap.appendChild(zone);
+
+  var gaps = ex.gaps || [];
+  var opciones = ex.options || [];
+  var usadas = {};
+  var i = 0;
+
+  function paso() {
+    zone.innerHTML = '';
+
+    if (i >= gaps.length) {
+      /* al acabar se dice cuál sobraba: es media pregunta del examen */
+      var sobra = null;
+      for (var k = 0; k < opciones.length; k++) if (!usadas[opciones[k].id]) sobra = opciones[k];
+      if (sobra) {
+        var n = el('div', 'note');
+        n.appendChild(el('p', 'instruction', 'La frase que sobraba'));
+        var p = el('p');
+        p.innerHTML = '<b>' + esc(sobra.id) + '</b> — ' + esc(sobra.t);
+        n.appendChild(p);
+        if (ex.extraWhy) {
+          var w = el('p', 'muted');
+          w.style.marginTop = '.6rem';
+          w.innerHTML = esc(ex.extraWhy).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/_(.+?)_/g, '<em>$1</em>');
+          n.appendChild(w);
+        }
+        zone.appendChild(n);
+      }
+      var fin = el('div', 'btn-row');
+      var b = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+      fin.appendChild(b);
+      zone.appendChild(fin);
+      b.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+      return;
+    }
+
+    slots.forEach(function (s, k) { if (s) s.classList[k === i ? 'add' : 'remove']('is-now'); });
+    if (slots[i] && slots[i].scrollIntoView) { try { slots[i].scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+
+    var gap = gaps[i];
+    zone.appendChild(el('p', 'qnum', 'Hueco ' + (i + 1) + ' de ' + gaps.length + ' · quedan ' + (opciones.length - i) + ' frases'));
+
+    var lista = el('div', 'opts');
+    var botones = [];
+    var hecho = false;
+
+    opciones.forEach(function (o) {
+      if (usadas[o.id]) return;         /* cada frase se usa una sola vez */
+      var b = el('button', 'opt opt--sentence');
+      b.type = 'button';
+      b.appendChild(el('span', 'opt__key', o.id));
+      b.appendChild(el('span', 'opt__t', o.t));
+      b.addEventListener('click', function () { responde(o, b); });
+      botones.push({ o: o, el: b });
+      lista.appendChild(b);
+    });
+    zone.appendChild(lista);
+
+    var after = el('div');
+    zone.appendChild(after);
+
+    function responde(elegida, boton) {
+      if (hecho) return;
+      hecho = true;
+      var ok = elegida.id === gap.ok;
+
+      botones.forEach(function (x) {
+        x.el.disabled = true;
+        if (x.o.id === gap.ok) x.el.className = 'opt opt--sentence opt--ok';
+        else if (x.o.id === elegida.id) x.el.className = 'opt opt--sentence opt--bad';
+        else x.el.className = 'opt opt--sentence opt--dim';
+      });
+
+      /* la correcta se coloca en el texto, acierte o no: así el texto
+         sigue teniendo sentido para resolver los huecos siguientes */
+      usadas[gap.ok] = true;
+      var buena = null;
+      for (var k = 0; k < opciones.length; k++) if (opciones[k].id === gap.ok) buena = opciones[k];
+      if (slots[i]) {
+        slots[i].textContent = (buena ? buena.t : '');
+        slots[i].className = 'gapslot gapslot--sentence ' + (ok ? 'gapslot--ok' : 'gapslot--bad');
+      }
+
+      after.appendChild(trapPanel({
+        trap: null,
+        ok: (buena ? gap.ok + ' — ' + buena.t : gap.ok),
+        okLabel: ok ? 'Correcta' : 'Encajaba la ' + gap.ok,
+        why: gap.why
+      }));
+
+      ctx.score(ok, {
+        type: 'mcq',
+        question: 'Hueco ' + (i + 1) + ' · ' + (ex.heading || 'Gapped text'),
+        opts: botones.map(function (x) { return x.o.id + ' — ' + x.o.t; }),
+        ok: (function () { for (var z = 0; z < botones.length; z++) if (botones[z].o.id === gap.ok) return z; return 0; })(),
+        why: gap.why,
+        instruction: 'Gapped text'
+      });
+
+      var row = el('div', 'btn-row');
+      var next = button(i + 1 < gaps.length ? 'Siguiente hueco' : 'Ver el resultado', 'btn--primary', function () { i++; paso(); });
+      row.appendChild(next);
+      after.appendChild(row);
+      next.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); next.click(); } };
+    }
+
+    ctx.keys = function (e) {
+      var k = String(e.key || '').toUpperCase();
+      for (var z = 0; z < botones.length; z++) {
+        if (botones[z].o.id === k) { e.preventDefault(); responde(botones[z].o, botones[z].el); return; }
+      }
+    };
+  }
+
+  paso();
+  return wrap;
+};
+
+/* ---- Part 7: multiple matching ----
+   Varias secciones y diez preguntas. Lo que se busca no es la
+   palabra repetida sino la reformulación: por eso el distractor
+   suele contener literalmente las palabras de la pregunta. */
+RENDER.matching = function (ex, ctx) {
+  var wrap = el('div');
+  if (ex.instructions) wrap.appendChild(el('p', 'instruction', ex.instructions));
+  if (ex.heading) wrap.appendChild(el('h2', 'reading__title', ex.heading));
+
+  var secciones = ex.sections || [];
+  var box = el('div', 'reading__text examtext sections');
+  secciones.forEach(function (s) {
+    var art = el('div', 'section');
+    var h = el('p', 'section__id');
+    h.innerHTML = '<b>' + esc(s.id) + '</b>' + (s.title ? ' · ' + esc(s.title) : '');
+    art.appendChild(h);
+    (isArr(s.text) ? s.text : [s.text]).forEach(function (p) { art.appendChild(el('p', null, p)); });
+    box.appendChild(art);
+  });
+  wrap.appendChild(box);
+
+  if (isArr(ex.glossary) && ex.glossary.length) {
+    var gl = el('div', 'glossary');
+    ex.glossary.forEach(function (g) {
+      var it = el('div', 'glossary__item');
+      it.appendChild(el('span', 'glossary__w', g.w));
+      it.appendChild(el('span', 'glossary__d', g.d));
+      gl.appendChild(it);
+    });
+    wrap.appendChild(gl);
+  }
+
+  var zone = el('div');
+  wrap.appendChild(zone);
+
+  var qs = ex.questions || [];
+  var i = 0;
+
+  function paso() {
+    zone.innerHTML = '';
+    if (i >= qs.length) {
+      var fin = el('div', 'btn-row');
+      var b = button(ctx.lastStep ? 'Terminar' : 'Continuar', 'btn--primary', ctx.next);
+      fin.appendChild(b);
+      zone.appendChild(fin);
+      b.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
+      return;
+    }
+
+    var q = qs[i];
+    zone.appendChild(el('p', 'qnum', 'Pregunta ' + (i + 1) + ' de ' + qs.length));
+    zone.appendChild(el('p', 'question', q.q));
+
+    var lista = el('div', 'opts opts--row');
+    var botones = [];
+    var hecho = false;
+
+    secciones.forEach(function (s) {
+      var b = el('button', 'opt opt--letter');
+      b.type = 'button';
+      b.appendChild(el('span', 'opt__key', s.id));
+      if (s.title) b.appendChild(el('span', 'opt__t', s.title));
+      b.addEventListener('click', function () { responde(s.id); });
+      botones.push({ id: s.id, el: b });
+      lista.appendChild(b);
+    });
+    zone.appendChild(lista);
+
+    var after = el('div');
+    zone.appendChild(after);
+
+    function responde(id) {
+      if (hecho) return;
+      hecho = true;
+      var ok = id === q.ok;
+      botones.forEach(function (x) {
+        x.el.disabled = true;
+        if (x.id === q.ok) x.el.className = 'opt opt--letter opt--ok';
+        else if (x.id === id) x.el.className = 'opt opt--letter opt--bad';
+        else x.el.className = 'opt opt--letter opt--dim';
+      });
+
+      after.appendChild(trapPanel({
+        trap: null,
+        ok: 'Sección ' + q.ok + (q.quote ? ' — «' + q.quote + '»' : ''),
+        okLabel: ok ? 'Correcta' : 'Estaba en la ' + q.ok,
+        why: q.why
+      }));
+
+      ctx.score(ok, {
+        type: 'mcq',
+        question: q.q,
+        opts: secciones.map(function (s) { return s.id + (s.title ? ' · ' + s.title : ''); }),
+        ok: (function () { for (var z = 0; z < secciones.length; z++) if (secciones[z].id === q.ok) return z; return 0; })(),
+        why: q.why,
+        instruction: 'Multiple matching'
+      });
+
+      var row = el('div', 'btn-row');
+      var next = button(i + 1 < qs.length ? 'Siguiente pregunta' : 'Ver el resultado', 'btn--primary', function () { i++; paso(); box.scrollTop = 0; });
+      row.appendChild(next);
+      after.appendChild(row);
+      next.focus();
+      ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); next.click(); } };
+    }
+
+    ctx.keys = function (e) {
+      var k = String(e.key || '').toUpperCase();
+      for (var z = 0; z < botones.length; z++) {
+        if (botones[z].id === k) { e.preventDefault(); responde(botones[z].id); return; }
+      }
+    };
+  }
+
+  paso();
+  return wrap;
+};
+
 /* ---- speaking: cronómetro + MediaRecorder + respuesta modelo ---- */
 RENDER.speaking = function (ex, ctx) {
   var wrap = el('div');
@@ -2414,9 +2668,6 @@ function viewMap() {
   head.appendChild(left);
 
   var right = el('div', 'btn-row');
-  if (EXAM_PLAN.length) {
-    right.appendChild(button('Simulacros', 'btn--primary', function () { goto('#/exams'); }));
-  }
   if (S.missed.length) {
     right.appendChild(button('Repasar fallos (' + Math.min(20, S.missed.length) + ')', 'btn--ghost', function () { goto('#/review'); }));
   }
@@ -2424,6 +2675,8 @@ function viewMap() {
   v.appendChild(head);
 
   v.appendChild(el('p', 'lede', 'Cada ejercicio te enseña la frase que dirías traduciendo del español, tachada, junto a la que se dice de verdad. Al final del recorrido, cuatro simulacros del Cambridge B2 First.'));
+
+  if (EXAM_PLAN.length) v.appendChild(bannerSimulacros());
 
   var dn = doneCount();
   var prog = el('div', 'progress');
@@ -2477,6 +2730,40 @@ function viewMap() {
 
   v.appendChild(bloqueDatos());
   mount(v);
+}
+
+/* Los simulacros no dependen del recorrido de 60 días, así que van
+   arriba del todo y con su propio bloque: metidos en un botón de la
+   esquina pasaban desapercibidos. */
+function bannerSimulacros() {
+  var total = 0, hechas = 0, suma = 0;
+  EXAM_PLAN.forEach(function (p) {
+    total += p.parts;
+    var reg = S.exams && S.exams[p.id];
+    if (reg) for (var k in reg) if (reg.hasOwnProperty(k)) { hechas++; suma += reg[k].score || 0; }
+  });
+  var media = hechas ? Math.round(suma / hechas) : null;
+
+  var b = el('button', 'banner');
+  b.type = 'button';
+
+  var izq = el('div', 'banner__body');
+  izq.appendChild(el('p', 'banner__eyebrow', 'Simulacros de examen'));
+  izq.appendChild(el('p', 'banner__title', 'Haz el examen sin esperar a los 60 días'));
+  izq.appendChild(el('p', 'banner__text',
+    'Los formatos exactos del Cambridge B2 First, con corrección inmediata pregunta a pregunta. Entras cuando quieras: no hace falta tener días hechos.'));
+
+  var meta = el('p', 'banner__meta');
+  if (hechas === 0) meta.textContent = EXAM_PLAN.length + (EXAM_PLAN.length === 1 ? ' prueba disponible · ' : ' pruebas disponibles · ') + total + ' partes · sin empezar';
+  else if (hechas < total) meta.textContent = hechas + ' de ' + total + ' partes hechas · media ' + media + '%';
+  else meta.textContent = 'Todas las partes hechas · media ' + media + '%';
+  izq.appendChild(meta);
+
+  b.appendChild(izq);
+  b.appendChild(el('span', 'banner__go', 'Abrir →'));
+
+  b.addEventListener('click', function () { goto('#/exams'); });
+  return b;
 }
 
 /* Copia de seguridad. El progreso vive en el navegador, así que esta

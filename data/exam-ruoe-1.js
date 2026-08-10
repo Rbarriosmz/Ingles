@@ -245,6 +245,122 @@ REGISTER_EXAM({
         ok:1,
         why:"Lleva cuatro años de siete y ya se le puede dejar solo con una campana del XVIII. La A confunde «puede trabajar solo» con «ha terminado», y la C toma un dato cierto, que era ingeniero de sonido, y le inventa una relación causal que el texto no establece." }
     ]
+  },
+
+  /* ---------------------------------------------------------
+     Part 6 · Gapped text · 6 huecos, 7 frases (sobra una)
+     --------------------------------------------------------- */
+  { n:6, type:"gappedtext", count:6,
+    title:"Gapped text",
+    instructions:"Coloca la frase que encaja en cada hueco. Hay siete frases y seis huecos: una sobra. Fíjate en los pronombres y los conectores, que son las costuras que unen una frase con la anterior y con la siguiente.",
+    heading:"The woman who drew the ocean floor",
+    text:"In 1952 Marie Tharp was working in a basement office at Columbia University, forbidden from going to sea because she was a woman. {1} What she had instead were thousands of pages of depth readings, collected by male colleagues on ships in the North Atlantic and handed to her as columns of numbers.\n\n" +
+         "Her job was to turn those columns into pictures. Working by hand, she plotted each reading onto a long sheet of paper and joined them into cross-sections of the sea bed. {2} It ran down the centre of the ocean like a seam, and at its middle there was a deep notch.\n\n" +
+         "Tharp thought the notch was a rift valley, a place where the floor of the ocean was slowly pulling apart. That idea was dangerous. {3} Her supervisor, Bruce Heezen, dismissed her interpretation as girl talk and told her to do the whole thing again.\n\n" +
+         "She did it again. The rift was still there. {4} When those were plotted on the same scale, the earthquakes fell in a line that ran exactly along the valley she had drawn.\n\n" +
+         "Heezen changed his mind, and the two of them worked together for the next twenty years. {5} It appeared in 1977, the year he died, and copies of it still hang in classrooms and government offices around the world.\n\n" +
+         "Tharp's name was left off many of the early papers, and for decades the discovery was described as Heezen's. {6} She lived long enough to see that change, dying in 2006 at the age of eighty-six.",
+    options:[
+      { id:"A", t:"What settled the argument was an unrelated map, this one of earthquake epicentres." },
+      { id:"B", t:"After six profiles she noticed something that none of the numbers had suggested on their own: a mountain range." },
+      { id:"C", t:"Sonar had been developed during the war to hunt submarines, and its peacetime uses were still being worked out." },
+      { id:"D", t:"Their finished map of the whole ocean floor took twenty years to complete." },
+      { id:"E", t:"The rule was not written down anywhere, but nobody in the department thought to question it." },
+      { id:"F", t:"Recognition came slowly, and mostly after she had stopped working." },
+      { id:"G", t:"It implied continental drift, which most geologists of the time regarded as close to nonsense." }
+    ],
+    gaps:[
+      { ok:"E",
+        why:"<em>The rule</em> solo puede referirse a la prohibición de embarcar que acaba de mencionarse. Es la costura hacia atrás más clara del texto: un artículo definido delante de un sustantivo que no ha aparecido antes obliga a buscar a qué se refiere." },
+      { ok:"B",
+        why:"La frase siguiente empieza con <em>It ran down the centre of the ocean</em>, y ese <em>it</em> necesita un singular al que referirse. <em>A mountain range</em> lo es. Además <em>after six profiles</em> encadena con el trabajo de trazar secciones que se describe justo antes." },
+      { ok:"G",
+        why:"<em>That idea was dangerous</em> pide una explicación de por qué lo era, y la G la da: implicaba la deriva continental. El <em>it</em> inicial recoge <em>that idea</em>, y lo que viene después, el desprecio del supervisor, es la consecuencia." },
+      { ok:"A",
+        why:"La frase siguiente dice <em>when <b>those</b> were plotted</em>, en plural, y necesita un antecedente: los epicentros. Ojo con la trampa de leer solo hacia atrás: <em>the rift was still there</em> no anticipa nada, y es el hueco donde más gente se equivoca." },
+      { ok:"D",
+        why:"<em>It appeared in 1977</em> necesita un sujeto singular que pueda aparecer, y el mapa terminado lo es. Además <em>took twenty years</em> encadena con los veinte años de trabajo conjunto que se acaban de mencionar." },
+      { ok:"F",
+        why:"<em>She lived long enough to see <b>that</b> change</em> exige que antes se haya nombrado un cambio. El reconocimiento que llega tarde lo es. La frase también contrasta con el olvido descrito justo antes, que es la otra costura." }
+    ],
+    extraWhy:"Es verosímil, encaja de tema y menciona el sonar, que es de donde salían las mediciones. Pero **no cose nada**: ninguna frase posterior recoge nada de lo que dice. Esa es la prueba que hay que aplicar siempre a la que sobra." },
+
+  /* ---------------------------------------------------------
+     Part 7 · Multiple matching · 10 preguntas, 4 secciones
+     --------------------------------------------------------- */
+  { n:7, type:"matching", count:10,
+    title:"Multiple matching",
+    instructions:"Cuatro personas que cambiaron de profesión pasados los cuarenta. Decide en qué sección se dice cada cosa. Lo que se busca no es la palabra repetida sino la idea reformulada.",
+    heading:"Starting again at forty",
+    sections:[
+      { id:"A", title:"Dan, abogado y ahora ebanista",
+        text:[
+          "I was thirty-nine when I made my first chair and forty-three when I finally stopped practising law. The money question is the one everybody asks and it is easily the least interesting: I earn roughly a third of what I did, and I knew that going in. What genuinely surprised me was the tiredness, or rather the absence of it. I had assumed physical work would leave me exhausted, and instead I sleep better than I have at any point since university. The hardest part was telling people. My father asked me twice, in the same conversation, whether I had actually been sacked. I had eighteen months of savings behind me, and that is the only honest reason this worked. Without them I would have crawled back to the firm inside a year."
+        ] },
+      { id:"B", title:"Priya, profesora y ahora programadora",
+        text:[
+          "Everyone assumes I left because of the behaviour or the workload, and it was neither. I loved being in a classroom. What finished me was the paperwork, and the sense that the paperwork was the point. I taught myself to code in the evenings for two years before I applied for a single job, which people describe as impressive and I would describe as slow. My salary roughly doubled, and I feel uncomfortable about how much difference that has made to my life. What I miss, and I did not expect to miss it, is having a hundred and fifty people who need me by name every single day. Nobody in an office needs you like that, and I am not sure anyone should."
+        ] },
+      { id:"C", title:"Martin, militar y ahora enfermero",
+        text:[
+          "I had been a soldier for twenty-two years when I started retraining at forty-one. People expect the two jobs to have nothing to do with each other, and they are wrong: both are shift work, both are about staying calm in a room where somebody else cannot. The training was far harder than I had allowed for, mostly because I had completely forgotten how to sit an examination. I was the oldest person in my cohort by about fifteen years and the only one who turned up without a laptop. What I had not anticipated at all was how much of the work is talking to families rather than to patients, and that turned out to be the part I am best at."
+        ] },
+      { id:"D", title:"Elena, banca y ahora panadera",
+        text:[
+          "I did not have a plan, whatever I may have said at the time. I had a redundancy payment and a stubborn idea, and the two are not the same as a plan. I opened the bakery eleven months after leaving the bank and it lost money steadily for two years. My husband kept his job throughout, and that is the honest answer to how we ate. I get up at four. People find that detail romantic, and I would like to say plainly that it is neither romantic nor terrible, it is simply a fact of the work. If somebody asks me whether it was worth doing, I say yes without hesitating, and then I tell them not to attempt it unless there is another income in the house."
+        ] }
+    ],
+    glossary:[
+      {w:"be sacked", d:"ser despedido"},
+      {w:"savings", d:"ahorros"},
+      {w:"workload", d:"carga de trabajo"},
+      {w:"cohort", d:"promoción, grupo"},
+      {w:"allow for", d:"prever, contar con"},
+      {w:"redundancy payment", d:"indemnización por despido"},
+      {w:"stubborn", d:"testarudo"},
+      {w:"turn up", d:"presentarse, aparecer"}
+    ],
+    questions:[
+      { q:"Which person says the change was only possible because of money they had put aside beforehand?",
+        ok:"A", quote:"I had eighteen months of savings behind me",
+        why:"Dan lo dice sin rodeos: dieciocho meses de ahorros, y sin ellos habría vuelto al bufete. Elena también habla de dinero, pero el suyo es una indemnización y sobre todo el sueldo de su marido, que es otra cosa: dinero que entra, no dinero apartado antes." },
+
+      { q:"Which person depended on someone else's earnings while the new business lost money?",
+        ok:"D", quote:"My husband kept his job throughout",
+        why:"Elena. La palabra <em>income</em> aparece dos veces en su sección y la segunda es un consejo directo: no lo intentes sin otro sueldo en casa." },
+
+      { q:"Which person learned the new skill alone before looking for work in the field?",
+        ok:"B", quote:"I taught myself to code in the evenings for two years",
+        why:"Priya, dos años por las tardes antes de echar una sola solicitud. Martin también se formó de nuevo, pero de forma reglada y en una promoción con compañeros, que es justo lo contrario de aprender solo." },
+
+      { q:"Which person found the academic side of retraining unexpectedly hard?",
+        ok:"C", quote:"I had completely forgotten how to sit an examination",
+        why:"Martin. Fíjate en que la pregunta dice <em>unexpectedly</em> y él dice <em>far harder than I had allowed for</em>: la reformulación es exactamente eso, y no aparece la palabra <em>unexpected</em> en ningún sitio." },
+
+      { q:"Which person mentions a relative questioning whether the decision had really been their own?",
+        ok:"A", quote:"whether I had actually been sacked",
+        why:"El padre de Dan le pregunta dos veces si en realidad lo habían echado, o sea, si de verdad se fue él. Es una reformulación bastante indirecta y de las que más se fallan." },
+
+      { q:"Which person feels uneasy about the importance of their higher salary?",
+        ok:"B", quote:"I feel uncomfortable about how much difference that has made",
+        why:"Priya. Dan también habla de dinero, pero en su caso gana menos y dice que es la parte menos interesante: ninguna incomodidad, solo desinterés." },
+
+      { q:"Which person says the old and new jobs have more in common than others assume?",
+        ok:"C", quote:"both are shift work, both are about staying calm",
+        why:"Martin lo dice y además explica en qué: turnos y mantener la calma. La pregunta esconde la respuesta detrás de <em>people expect… and they are wrong</em>." },
+
+      { q:"Which person misses being relied on by a large number of people?",
+        ok:"B", quote:"a hundred and fifty people who need me by name",
+        why:"Priya. Es la única que habla de echar algo de menos, y el detalle del número exacto es la marca de la sección." },
+
+      { q:"Which person rejects the idea that part of their routine is appealing?",
+        ok:"D", quote:"People find that detail romantic",
+        why:"Elena, sobre levantarse a las cuatro: ni romántico ni terrible, simplemente parte del trabajo. La pregunta usa <em>appealing</em> donde el texto usa <em>romantic</em>, que es el tipo de sinónimo que hay que saber ver." },
+
+      { q:"Which person was surprised by a physical effect of the new work?",
+        ok:"A", quote:"I sleep better than I have at any point since university",
+        why:"Dan esperaba acabar agotado y duerme mejor que nunca. Es un efecto físico y él mismo lo marca como sorpresa: <em>what genuinely surprised me was the tiredness, or rather the absence of it</em>." }
+    ]
   }
 
   ]

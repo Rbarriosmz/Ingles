@@ -242,6 +242,53 @@ input,textarea{font:inherit;color:inherit}
 .match__pairs{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:1.3rem}
 .match__side{display:flex;flex-direction:column;gap:.45rem}
 
+/* ---------- banner de simulacros ---------- */
+
+.banner{
+  display:flex;align-items:center;gap:1.4rem;
+  width:100%;margin:1.8rem 0 .4rem;
+  padding:1.3rem clamp(1.1rem,3.5vw,1.8rem);
+  text-align:left;cursor:pointer;
+  border:1px solid rgba(233,165,38,.42);
+  border-left:4px solid var(--marigold);
+  border-radius:var(--r-m);
+  background:
+    linear-gradient(100deg, rgba(233,165,38,.16) 0%, rgba(233,165,38,.04) 45%, rgba(22,48,42,0) 80%),
+    var(--panel);
+  transition:transform .18s var(--step),border-color .18s var(--step),background .18s var(--step);
+}
+.banner:hover{
+  transform:translateY(-2px);
+  border-color:var(--marigold);
+  background:
+    linear-gradient(100deg, rgba(233,165,38,.24) 0%, rgba(233,165,38,.07) 45%, rgba(22,48,42,0) 80%),
+    var(--panel);
+}
+.banner__body{flex:1;min-width:0}
+.banner__eyebrow{
+  font-family:var(--mono);font-size:.62rem;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--marigold);margin:0 0 .35rem;
+}
+.banner__title{
+  font-family:var(--display);font-weight:800;
+  font-size:clamp(1.15rem,3.2vw,1.55rem);letter-spacing:-.025em;
+  line-height:1.15;margin:0 0 .45rem;color:var(--chalk);
+}
+.banner__text{font-size:.95rem;line-height:1.5;color:var(--muted);margin:0;max-width:56ch}
+.banner__meta{
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.08em;
+  color:var(--chalk);margin:.7rem 0 0;
+}
+.banner__go{
+  flex:none;
+  font-family:var(--mono);font-size:.78rem;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;
+  padding:.75rem 1.2rem;border-radius:var(--r-s);
+  background:var(--marigold);color:var(--void);
+  transition:transform .18s var(--step);
+}
+.banner:hover .banner__go{transform:translateX(3px)}
+
 /* ---------- simulacros ---------- */
 
 .exams{
@@ -293,6 +340,52 @@ input,textarea{font:inherit;color:inherit}
   border-bottom-color:var(--coral);background:rgba(232,101,74,.16);
   color:var(--coral);box-shadow:none;
 }
+
+/* frases largas de la parte 6 */
+.opt--sentence{align-items:flex-start;font-size:.98rem;line-height:1.45}
+.opt--sentence .opt__key{
+  background:rgba(167,139,250,.14);border-color:rgba(167,139,250,.4);
+  color:var(--violet);font-weight:600;
+}
+.gapslot--sentence{
+  display:inline;white-space:normal;
+  font-family:var(--body);font-size:1em;
+  padding:.05em .3em;
+}
+
+/* letras de sección de la parte 7 */
+/* .opts se declara más abajo en este archivo, así que con una sola
+   clase ganaría él. Se doblan las clases para subir la especificidad. */
+.opts.opts--row{flex-direction:row;flex-wrap:wrap;gap:.5rem}
+.opt--letter{
+  /* .opt lleva width:100%, que aquí aplastaría el reparto en fila */
+  width:auto;min-width:0;
+  flex:1 1 10rem;align-items:center;gap:.6rem;
+  font-size:.9rem;line-height:1.3;
+}
+.opt--letter .opt__t{
+  overflow:hidden;text-overflow:ellipsis;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.opt--letter .opt__key{
+  font-size:.9rem;font-weight:600;
+  width:2rem;height:2rem;
+  background:rgba(233,165,38,.12);border-color:rgba(233,165,38,.4);color:var(--marigold);
+}
+
+.sections .section{padding-bottom:.9rem;margin-bottom:1.1rem;border-bottom:1px solid var(--line)}
+.sections .section:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.section__id{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;
+  color:var(--marigold);margin:0 0 .5rem;
+}
+.section__id b{
+  display:inline-grid;place-items:center;
+  width:1.6rem;height:1.6rem;margin-right:.3rem;
+  border-radius:var(--r-s);background:var(--marigold);color:var(--void);
+  font-size:.8rem;vertical-align:middle;
+}
+.sections p:first-child::first-letter{font-size:inherit;float:none;margin:0;color:inherit;font-family:inherit}
 
 .examex{
   font-family:var(--mono);font-size:.78rem;line-height:1.6;
@@ -1025,6 +1118,8 @@ input,textarea{font:inherit;color:inherit}
   .match__cols{grid-template-columns:1fr}
   .chip{font-size:.98rem;padding:.45rem .7rem}
   .exams{grid-template-columns:1fr}
+  .banner{flex-direction:column;align-items:stretch;gap:1rem}
+  .banner__go{text-align:center}
   .examtext{max-height:22rem;line-height:1.85}
   .gap-input--wide{min-width:9rem}
   .transform__line{line-height:2.4}
