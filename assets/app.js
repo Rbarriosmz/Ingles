@@ -3002,7 +3002,9 @@ function resetAll() {
    10b. Pantallas: simulacros
    ========================================================= */
 
-var EXAM_PLAN = (window.CURRICULUM && window.CURRICULUM.exams) || [];
+/* Copia, no referencia: el contenido local añade entradas aquí, y
+   no debe acabar metiéndolas dentro del currículo publicado. */
+var EXAM_PLAN = ((window.CURRICULUM && window.CURRICULUM.exams) || []).slice(0);
 var examPending = {};
 
 function loadExam(id, cb) {
