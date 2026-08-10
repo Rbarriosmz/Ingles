@@ -774,6 +774,15 @@ RENDER.listening = function (ex, ctx) {
       ctx.keys = function (e) { if (e.key === 'Enter') { e.preventDefault(); ctx.next(); } };
     }
 
+    /* el dictado es una sola frase, así que Enter envía.
+       Shift+Enter sigue haciendo salto de línea. */
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        if (answered) ctx.next(); else submit();
+      }
+    });
+
     ctx.keys = function (e) {
       if (e.key === 'Enter' && !answered) { e.preventDefault(); submit(); }
       else if (e.key === 'Enter') { e.preventDefault(); ctx.next(); }
@@ -1514,19 +1523,23 @@ function renderReviewStep() {
   host.appendChild(el('p', 'step__block', 'Cuaderno de fallos · del día ' + pad2(item.day)));
   v.appendChild(host);
 
+  /* El repaso guarda paso a paso: si sales a la mitad, lo repasado
+     se queda repasado y el XP ganado no se pierde. */
   var ctx = {
     lastStep: review.i === review.items.length - 1,
     keys: null, focus: null, cleanup: null,
     score: function (ok) {
-      if (ok) { review.right++; review.xp += 10; }
-      else { review.wrong++; review.xp += 2; }
+      var gained = ok ? 10 : 2;
+      if (ok) review.right++; else review.wrong++;
+      review.xp += gained;
+      S.xp += gained;
       dropMissed(item.id);
-      /* si vuelve a fallar, vuelve al cuaderno para otra ronda */
-      if (!ok) addMissed(item.day, item.ex, item.label);
+      commit();
     },
     next: function () {
       if (ctx.cleanup) { try { ctx.cleanup(); } catch (e) {} }
       dropMissed(item.id);
+      commit();
       review.i++;
       renderReviewStep();
     }
@@ -1544,7 +1557,6 @@ function renderReviewStep() {
 function finishReview() {
   var total = review.right + review.wrong;
   var score = total ? Math.round(review.right / total * 100) : 100;
-  S.xp += review.xp;
   commit();
 
   var v = view('end');
