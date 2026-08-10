@@ -34,7 +34,7 @@ var DEFAULTS = { done:{}, xp:0, streak:0, last:null, missed:[], trophies:[] };
    Si el esquema evoluciona, se sube SCHEMA y se anade un paso en
    migrate(), que solo puede anadir campos o corregirlos. Nunca borrar.
    Cambiar la clave equivaldria a borrarle el progreso a todo el mundo. */
-var SCHEMA = 4;
+var SCHEMA = 5;
 
 var storageOK = (function () {
   try {
@@ -62,6 +62,7 @@ function normalizeState(raw) {
   s.trophies = Object.prototype.toString.call(raw.trophies) === '[object Array]' ? raw.trophies : [];
   s.exams   = (raw.exams && typeof raw.exams === 'object') ? raw.exams : {};
   s.tags    = (raw.tags && typeof raw.tags === 'object') ? raw.tags : {};
+  s.quiz    = (raw.quiz && typeof raw.quiz === 'object') ? raw.quiz : {};
   return migrate(s);
 }
 
@@ -83,7 +84,12 @@ function migrate(s) {
     if (!s.tags) s.tags = {};
     s.v = 4;
   }
-  /* futuros pasos: if (s.v < 5) { ...; s.v = 5; } */
+  if (s.v < 5) {
+    /* v5 anade los records del juego rapido. Nada de lo anterior cambia. */
+    if (!s.quiz) s.quiz = {};
+    s.v = 5;
+  }
+  /* futuros pasos: if (s.v < 6) { ...; s.v = 6; } */
   s.v = SCHEMA;
   return s;
 }
@@ -129,6 +135,16 @@ function mergeState(a, b) {
   out.trophies = [];
   [].concat(a.trophies, b.trophies).forEach(function (t) {
     if (out.trophies.indexOf(t) === -1) out.trophies.push(t);
+  });
+
+  /* juego rápido: por tema, gana el récord más alto */
+  out.quiz = {};
+  [a.quiz, b.quiz].forEach(function (src) {
+    for (var t in src) {
+      if (!src.hasOwnProperty(t)) continue;
+      var prev = out.quiz[t];
+      if (!prev || (src[t].points || 0) > (prev.points || 0)) out.quiz[t] = src[t];
+    }
   });
 
   /* diagnóstico: los intentos se suman, porque son historial */
@@ -543,6 +559,136 @@ function saveExamPart(examId, partN, score, right, total) {
     score: prev ? Math.max(prev.score, score) : score,
     right: right, total: total, date: todayISO()
   };
+  commit();
+}
+
+/* =========================================================
+   4c. Juego de preguntas rápidas
+
+   Diez preguntas, doce segundos cada una, unos dos minutos en
+   total. Los puntos premian la rapidez: acertar al segundo
+   vale el doble que acertar en el último suspiro.
+   ========================================================= */
+
+var QUIZ_BANK = {};
+window.REGISTER_QUIZ = function (bank) {
+  if (!bank || typeof bank !== 'object') return;
+  for (var t in bank) if (bank.hasOwnProperty(t)) QUIZ_BANK[t] = bank[t];
+};
+
+var QUIZ_N = 10;          /* preguntas por partida */
+var QUIZ_SECS = 12;       /* segundos por pregunta */
+var QUIZ_MAX = 100;       /* puntos máximos de una pregunta */
+
+/* Además del banco, se aprovechan las preguntas ya escritas en
+   lecciones y simulacros, siempre que sean cortas: una pregunta
+   de doce segundos no puede tener un párrafo de enunciado. */
+function harvestFromContent(tag, seen) {
+  var out = [];
+
+  function add(ex, etiquetas) {
+    if (!ex || !ex.opts || ex.opts.length !== 4) return;
+    if (typeof ex.ok !== 'number' || ex.ok < 0 || ex.ok > 3) return;
+    var enunciado = ex.es || ex.question || '';
+    if (!enunciado || enunciado.length > 95) return;      /* demasiado largo para el reloj */
+    var largas = ex.opts.filter(function (o) { return String(o).length > 60; });
+    if (largas.length) return;
+    if (tag !== '*' && etiquetas.indexOf(tag) === -1) return;
+    var clave = enunciado.slice(0, 40);
+    if (seen[clave]) return;
+    seen[clave] = 1;
+    out.push({ q: enunciado, opts: ex.opts, ok: ex.ok, why: ex.why || '', tag: etiquetas[0] || null });
+  }
+
+  for (var n in dayCache) {
+    var d = dayCache[n];
+    if (!d || !d.blocks) continue;
+    var et = tagsOf(null, parseInt(n, 10), null);
+    d.blocks.forEach(function (b) {
+      (b.items || []).forEach(function (it) {
+        if (it.type === 'mcq') add(it, tagsOf(it, parseInt(n, 10), null));
+        if (it.type === 'reading') (it.questions || []).forEach(function (q) { add(q, et); });
+      });
+    });
+  }
+
+  EXAMS.forEach(function (ex) {
+    (ex.parts || []).forEach(function (pt) {
+      var et = isArr(pt.tags) ? pt.tags : [];
+      if (pt.type === 'cloze') (pt.gaps || []).forEach(function (g, i) {
+        add({ question: 'Hueco ' + (i + 1) + ' · ' + (pt.heading || ''), opts: g.opts, ok: g.ok, why: g.why }, et);
+      });
+      if (pt.type === 'reading') (pt.questions || []).forEach(function (q) { add(q, et); });
+    });
+  });
+
+  return out;
+}
+
+/* Carga todos los días con contenido, una sola vez, para poder
+   sacar preguntas de ellos. */
+function precargaDias(cb) {
+  var pendientes = 0, lanzado = false;
+  for (var n = 1; n <= TOTAL; n++) {
+    if (dayCache.hasOwnProperty(n)) continue;
+    if (!isUnlocked(n) && !S.done[n]) continue;      /* solo lo que ya puedes ver */
+    pendientes++;
+    loadDay(n, function () { if (--pendientes === 0 && lanzado) cb(); });
+  }
+  lanzado = true;
+  if (pendientes === 0) cb();
+}
+
+function quizTopics() {
+  var out = [];
+  for (var t in QUIZ_BANK) {
+    if (!QUIZ_BANK.hasOwnProperty(t) || !TAG_NAMES[t]) continue;
+    if (!isArr(QUIZ_BANK[t]) || QUIZ_BANK[t].length < 4) continue;
+    out.push({ tag: t, name: tagName(t), n: QUIZ_BANK[t].length });
+  }
+  out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  return out;
+}
+
+function quizPool(tag) {
+  var seen = {}, pool = [];
+  if (tag === '*') {
+    for (var t in QUIZ_BANK) {
+      if (!QUIZ_BANK.hasOwnProperty(t)) continue;
+      (QUIZ_BANK[t] || []).forEach(function (q) {
+        var c = q.q.slice(0, 40);
+        if (seen[c]) return; seen[c] = 1;
+        pool.push({ q: q.q, opts: q.opts, ok: q.ok, why: q.why, tag: t });
+      });
+    }
+  } else {
+    (QUIZ_BANK[tag] || []).forEach(function (q) {
+      var c = q.q.slice(0, 40);
+      if (seen[c]) return; seen[c] = 1;
+      pool.push({ q: q.q, opts: q.opts, ok: q.ok, why: q.why, tag: tag });
+    });
+  }
+  pool = pool.concat(harvestFromContent(tag, seen));
+  return pool;
+}
+
+function barajar(a) {
+  var out = a.slice(0);
+  for (var i = out.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var t = out[i]; out[i] = out[j]; out[j] = t;
+  }
+  return out;
+}
+
+function quizBest(tag) { return (S.quiz && S.quiz[tag]) || null; }
+
+function saveQuiz(tag, points, right, secs) {
+  if (!S.quiz) S.quiz = {};
+  var prev = S.quiz[tag];
+  if (!prev || points > (prev.points || 0)) {
+    S.quiz[tag] = { points: points, right: right, secs: secs, date: todayISO() };
+  }
   commit();
 }
 
@@ -2827,6 +2973,8 @@ function viewMap() {
     v.appendChild(tools);
   }
 
+  if (quizTopics().length) v.appendChild(bannerQuiz());
+
   var dn = doneCount();
   var prog = el('div', 'progress');
   var meta = el('div', 'progress__meta');
@@ -2912,6 +3060,31 @@ function bannerSimulacros() {
   b.appendChild(el('span', 'banner__go', 'Abrir →'));
 
   b.addEventListener('click', function () { goto('#/exams'); });
+  return b;
+}
+
+function bannerQuiz() {
+  var temas = quizTopics();
+  var jugados = 0, mejor = 0;
+  for (var t in (S.quiz || {})) {
+    if (!S.quiz.hasOwnProperty(t)) continue;
+    jugados++;
+    if ((S.quiz[t].points || 0) > mejor) mejor = S.quiz[t].points;
+  }
+
+  var b = el('button', 'banner banner--quiz');
+  b.type = 'button';
+  var izq = el('div', 'banner__body');
+  izq.appendChild(el('p', 'banner__eyebrow', 'Preguntas rápidas'));
+  izq.appendChild(el('p', 'banner__title', 'Diez preguntas contra el reloj'));
+  izq.appendChild(el('p', 'banner__text',
+    'Dos minutos, doce segundos por pregunta y puntos por rapidez. Para calentar antes de una lección o para rematar el día.'));
+  izq.appendChild(el('p', 'banner__meta', jugados
+    ? temas.length + ' temas · tu mejor marca: ' + mejor + ' puntos'
+    : temas.length + ' temas para elegir · sin jugar todavía'));
+  b.appendChild(izq);
+  b.appendChild(el('span', 'banner__go', 'Jugar →'));
+  b.addEventListener('click', function () { goto('#/quiz'); });
   return b;
 }
 
@@ -3263,6 +3436,272 @@ function tituloExamen(s) {
   if (s >= 60) return 'Aprobado, pero justo.';
   if (s >= 45) return 'Todavía no llega.';
   return 'Esta parte hay que trabajarla entera.';
+}
+
+/* =========================================================
+   10b-bis. Pantallas: juego de preguntas rápidas
+   ========================================================= */
+
+function viewQuizHome() {
+  var v = view('quizhome');
+  v.appendChild(el('p', 'eyebrow', 'Preguntas rápidas'));
+  var h = el('h1', 'map__title');
+  h.innerHTML = 'Diez preguntas. <em>Dos minutos.</em>';
+  v.appendChild(h);
+  v.appendChild(el('p', 'lede', 'Doce segundos por pregunta. Cuanto antes aciertas, más puntos vale: responder al momento da el doble que responder en el último segundo. Elige tema o juega con todo mezclado.'));
+
+  var temas = quizTopics();
+  if (!temas.length) {
+    var e = el('div', 'empty');
+    e.appendChild(el('h3', null, 'No hay banco de preguntas'));
+    e.appendChild(el('p', null, 'Falta data/quiz.js, o sus temas no coinciden con las etiquetas de curriculum.js.'));
+    v.appendChild(e);
+    mount(v);
+    return;
+  }
+
+  var grid = el('div', 'quizgrid');
+
+  var mezcla = quizCard({ tag: '*', name: 'Todo mezclado', n: 0 }, true);
+  grid.appendChild(mezcla);
+  temas.forEach(function (t) { grid.appendChild(quizCard(t, false)); });
+  v.appendChild(grid);
+
+  var row = el('div', 'btn-row');
+  row.style.marginTop = '2rem';
+  row.appendChild(button('Volver al mapa', 'btn--ghost', function () { goto('#/map'); }));
+  v.appendChild(row);
+
+  mount(v);
+}
+
+function quizCard(t, esMezcla) {
+  var best = quizBest(t.tag);
+  var c = el('button', 'quizcard' + (esMezcla ? ' quizcard--all' : ''));
+  c.type = 'button';
+  c.appendChild(el('span', 'quizcard__name', t.name));
+  c.appendChild(el('span', 'quizcard__meta', esMezcla ? 'preguntas de todos los temas' : t.n + ' preguntas en el banco'));
+
+  var rec = el('span', 'quizcard__best');
+  if (best) {
+    rec.textContent = 'Récord ' + best.points + ' pts · ' + best.right + '/' + QUIZ_N;
+    rec.className = 'quizcard__best is-set';
+  } else {
+    rec.textContent = 'Sin jugar';
+  }
+  c.appendChild(rec);
+
+  c.addEventListener('click', function () { goto('#/quiz/' + t.tag); });
+  return c;
+}
+
+var quiz = null;
+
+function viewQuizPlay(tag) {
+  if (tag !== '*' && !QUIZ_BANK[tag]) { goto('#/quiz'); return; }
+
+  var v = view();
+  v.appendChild(el('p', 'eyebrow', 'Preparando la partida…'));
+  mount(v);
+
+  precargaDias(function () {
+    var pool = quizPool(tag);
+    if (pool.length < 4) { goto('#/quiz'); return; }
+
+    quiz = {
+      tag: tag,
+      items: barajar(pool).slice(0, QUIZ_N),
+      i: 0, right: 0, points: 0, streak: 0, bestStreak: 0,
+      t0: null, elapsed: 0, log: []
+    };
+    renderQuizStep();
+  });
+}
+
+function renderQuizStep() {
+  if (!quiz) { goto('#/quiz'); return; }
+  if (quiz.i >= quiz.items.length) { finishQuiz(); return; }
+
+  var it = quiz.items[quiz.i];
+  var v = view('quizplay');
+
+  /* cabecera: progreso, puntos y racha */
+  var top = el('div', 'quiz__top');
+  top.appendChild(el('span', 'quiz__count', (quiz.i + 1) + ' / ' + quiz.items.length));
+  var pts = el('span', 'quiz__points', quiz.points + ' pts');
+  top.appendChild(pts);
+  var racha = el('span', 'quiz__streak', quiz.streak >= 2 ? '×' + quiz.streak : '');
+  top.appendChild(racha);
+  top.appendChild(button('Salir', 'btn--sm btn--ghost', function () { pararReloj(); quiz = null; goto('#/quiz'); }));
+  v.appendChild(top);
+
+  /* barra de tiempo */
+  var barra = el('div', 'quizbar');
+  var relleno = el('div', 'quizbar__fill');
+  barra.appendChild(relleno);
+  v.appendChild(barra);
+
+  var host = el('div', 'step');
+  if (it.tag && TAG_NAMES[it.tag]) host.appendChild(el('p', 'step__block', tagName(it.tag)));
+  host.appendChild(el('p', 'quiz__q', it.q));
+
+  var lista = el('div', 'opts quiz__opts');
+  var botones = [];
+  var respondido = false;
+
+  (it.opts || []).forEach(function (texto, k) {
+    var b = el('button', 'opt');
+    b.type = 'button';
+    b.appendChild(el('span', 'opt__key', String.fromCharCode(65 + k)));
+    b.appendChild(el('span', 'opt__t', texto));
+    b.addEventListener('click', function () { responde(k); });
+    botones.push(b);
+    lista.appendChild(b);
+  });
+  host.appendChild(lista);
+
+  var pie = el('div', 'quiz__foot');
+  host.appendChild(pie);
+  v.appendChild(host);
+
+  mount(v);
+
+  /* ---- reloj ---- */
+  var inicio = new Date().getTime();
+  var restante = QUIZ_SECS;
+
+  quiz.timer = setInterval(function () {
+    var pasado = (new Date().getTime() - inicio) / 1000;
+    restante = Math.max(0, QUIZ_SECS - pasado);
+    var pct = (restante / QUIZ_SECS) * 100;
+    relleno.style.width = pct + '%';
+    relleno.className = 'quizbar__fill' + (pct < 30 ? ' is-low' : '');
+    if (restante <= 0) { responde(-1); }
+  }, 60);
+
+  function pararReloj() {
+    if (quiz && quiz.timer) { clearInterval(quiz.timer); quiz.timer = null; }
+  }
+
+  function responde(k) {
+    if (respondido) return;
+    respondido = true;
+    pararReloj();
+
+    var pasado = (new Date().getTime() - inicio) / 1000;
+    quiz.elapsed += Math.min(pasado, QUIZ_SECS);
+
+    var ok = (k === it.ok);
+    /* los puntos bajan linealmente con el tiempo, con un suelo del 40% */
+    var factor = Math.max(0.4, 1 - (pasado / QUIZ_SECS));
+    var gana = ok ? Math.round(QUIZ_MAX * factor) : 0;
+
+    if (ok) {
+      quiz.right++;
+      quiz.streak++;
+      if (quiz.streak > quiz.bestStreak) quiz.bestStreak = quiz.streak;
+      /* la racha añade un extra a partir de tres seguidas */
+      if (quiz.streak >= 3) gana += 20;
+      quiz.points += gana;
+    } else {
+      quiz.streak = 0;
+    }
+
+    quiz.log.push({ q: it.q, ok: ok, opts: it.opts, correcta: it.opts[it.ok], why: it.why, agotado: k === -1 });
+
+    botones.forEach(function (b, j) {
+      b.disabled = true;
+      if (j === it.ok) b.className = 'opt opt--ok';
+      else if (j === k) b.className = 'opt opt--bad';
+      else b.className = 'opt opt--dim';
+    });
+
+    relleno.style.width = '0%';
+    pts.textContent = quiz.points + ' pts';
+    racha.textContent = quiz.streak >= 2 ? '×' + quiz.streak : '';
+
+    var msg = el('p', 'quiz__verdict ' + (ok ? 'is-ok' : 'is-bad'));
+    msg.textContent = k === -1 ? 'Se acabó el tiempo' : (ok ? '+' + gana + ' pts' : 'No');
+    pie.appendChild(msg);
+
+    recordTags(it.tag ? [it.tag] : [], ok);
+    S.xp += ok ? 5 : 1;
+    commit();
+    feedback(ok, ok ? 5 : 1);
+
+    /* en un juego rápido no se lee nada: se pasa solo */
+    setTimeout(function () {
+      if (!quiz) return;
+      quiz.i++;
+      renderQuizStep();
+    }, ok ? 700 : 1400);
+  }
+
+  Keys.set(function (e) {
+    var k = optionIndexFromKey(e);
+    if (k >= 0 && k < botones.length) { e.preventDefault(); responde(k); }
+  });
+}
+
+function finishQuiz() {
+  var r = quiz;
+  var prev = quizBest(r.tag);
+  var record = !prev || r.points > prev.points;
+  saveQuiz(r.tag, r.points, r.right, Math.round(r.elapsed));
+  quiz = null;
+
+  var v = view('end');
+  v.appendChild(el('p', 'eyebrow', r.tag === '*' ? 'Todo mezclado' : tagName(r.tag)));
+  v.appendChild(el('p', 'end__xp', String(r.points)));
+  v.appendChild(el('p', 'end__xpl', 'puntos' + (record ? ' · récord nuevo' : '')));
+  v.appendChild(el('h1', 'end__title', tituloQuiz(r.right)));
+
+  var line = el('div', 'scoreline');
+  line.appendChild(scorebox(r.right + '/' + QUIZ_N, 'Aciertos', r.right >= 8 ? 'scorebox--mint' : ''));
+  line.appendChild(scorebox(Math.round(r.elapsed) + 's', 'Tiempo', ''));
+  line.appendChild(scorebox('×' + r.bestStreak, 'Mejor racha', 'scorebox--fire'));
+  v.appendChild(line);
+
+  if (prev && !record) {
+    var p = el('p', 'muted');
+    p.textContent = 'Tu récord en este tema sigue siendo ' + prev.points + ' puntos.';
+    v.appendChild(p);
+  }
+
+  var fallos = r.log.filter(function (x) { return !x.ok; });
+  if (fallos.length) {
+    var box = el('div', 'misslist');
+    box.appendChild(el('h3', null, 'Lo que fallaste'));
+    var ul = el('ul');
+    fallos.forEach(function (f) {
+      var li = el('li');
+      var d = el('div');
+      d.appendChild(el('div', null, f.q + (f.agotado ? ' (sin responder)' : '')));
+      var c = el('div', 'quiz__fix');
+      c.innerHTML = '<b>' + esc(f.correcta) + '</b>' + (f.why ? ' — ' + f.why : '');
+      d.appendChild(c);
+      li.appendChild(d);
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    v.appendChild(box);
+  }
+
+  var row = el('div', 'btn-row');
+  row.appendChild(button('Otra partida', 'btn--primary', function () { goto('#/quiz/' + r.tag); }));
+  row.appendChild(button('Cambiar de tema', 'btn--ghost', function () { goto('#/quiz'); }));
+  v.appendChild(row);
+
+  mount(v);
+  Keys.set(function (e) { if (e.key === 'Enter') { e.preventDefault(); goto('#/quiz/' + r.tag); } });
+}
+
+function tituloQuiz(right) {
+  if (right === 10) return 'Pleno.';
+  if (right >= 8) return 'Muy sólido.';
+  if (right >= 6) return 'Aprobado raspado.';
+  if (right >= 4) return 'Hay tema que repasar.';
+  return 'Este tema hay que trabajarlo entero.';
 }
 
 /* =========================================================
@@ -3810,6 +4249,11 @@ function route() {
   if (what === 'review') { viewReview(); return; }
   if (what === 'weak') { viewWeak(); return; }
   if (what === 'practice' && parts[1]) { viewPractice(parts[1]); return; }
+  if (what === 'quiz') {
+    if (parts[1]) viewQuizPlay(decodeURIComponent(parts[1]));
+    else { quiz = null; viewQuizHome(); }
+    return;
+  }
   if (what === 'exams') { viewExams(); return; }
   if (what === 'exam' && parts[1]) {
     if (parts[2] !== undefined && parts[2] !== '') viewExamPart(parts[1], parseInt(parts[2], 10) || 0);
@@ -3838,17 +4282,30 @@ if (!DAYS.length) {
     'o la lista de cuentas está vacía. <code>index.html</code> tiene que cargar los dos ' +
     'antes que <code>assets/app.js</code>.</p></div>';
 } else {
-  var session = Auth.current();
-  if (session) openSession(session);
-  else paintSession();
+  /* El arranque espera a DOMContentLoaded porque data/quiz.js se
+     carga después que este archivo: si pintáramos ya, el banco de
+     preguntas todavía estaría vacío. */
+  arrancaCuandoTodoEsté(function () {
+    var session = Auth.current();
+    if (session) openSession(session);
+    else paintSession();
 
-  /* Se intenta cargar el contenido local antes de pintar nada, para
-     que los simulacros de tus libros aparezcan en la misma lista.
-     Si no existe el archivo, se sigue igual. */
-  cargaContenidoLocal(function (hay) {
-    if (hay) console.info('[La Trampa] Contenido local cargado. No se publica: está en .gitignore.');
-    route();
+    /* El contenido local se busca antes de pintar, para que los
+       simulacros de tus libros salgan en la misma lista. Si el
+       archivo no existe, se sigue igual. */
+    cargaContenidoLocal(function (hay) {
+      if (hay) console.info('[La Trampa] Contenido local cargado. No se publica: está en .gitignore.');
+      route();
+    });
   });
+}
+
+function arrancaCuandoTodoEsté(fn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fn);
+  } else {
+    setTimeout(fn, 0);
+  }
 }
 
 })();
