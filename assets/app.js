@@ -361,7 +361,8 @@ function optionIndexFromKey(e) {
 var MISSED_CAP = 40;
 
 function missedId(day, ex) {
-  var seed = (ex.es || ex.text || ex.q || ex.audio || ex.prompt || '') + '|' + (ex.type || '');
+  var seed = [ex.es, ex.question, ex.text, ex.audio, ex.prompt, ex.title, ex.type]
+    .filter(function (x) { return typeof x === 'string' && x; }).join('|');
   var h = 0;
   for (var i = 0; i < seed.length; i++) { h = ((h << 5) - h + seed.charCodeAt(i)) | 0; }
   return day + ':' + h;
