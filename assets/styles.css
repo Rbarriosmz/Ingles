@@ -355,6 +355,14 @@ input,textarea{font:inherit;color:inherit}
   font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;
   text-transform:uppercase;color:var(--marigold);margin:0;
 }
+.examcard--local{border-left-color:var(--violet)}
+.examcard--local .examcard__paper{color:var(--violet)}
+.examcard__local{
+  display:inline-block;margin-left:.5rem;
+  padding:.1rem .4rem;border-radius:4px;
+  background:rgba(167,139,250,.16);color:var(--violet);
+  font-size:.9em;letter-spacing:.08em;
+}
 .examcard__title{font-family:var(--display);font-weight:800;font-size:1.3rem;letter-spacing:-.025em;margin:.1rem 0 .3rem}
 .examcard__meta{font-size:.88rem;color:var(--muted);margin:0;line-height:1.45}
 .examcard__state{

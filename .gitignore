@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------
+# Contenido local: NO se sube nunca.
+#
+# Todo lo que salga de tus libros (FCE Trainer, Objective First,
+# Successful Writing) va aquí. Son libros con derechos de autor y
+# esta web es publica: cualquiera puede descargarse un archivo de
+# data/ escribiendo su URL, sin pasar por la pantalla de acceso.
+#
+# Publicarlos seria redistribuirlos. Tenerlos en tu equipo para
+# estudiar tu es otra cosa, y para eso esta este patron.
+#
+# El motor carga data/local.js si existe y lo ignora si no, asi que
+# la web publica funciona igual sin estos archivos.
+# ---------------------------------------------------------------
+
+data/local.js
+data/local-*.js
+data/local/
+
+# Material de origen y volcados de OCR
+*.pdf
+*.mp3
+ocr/
+extraido/
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store

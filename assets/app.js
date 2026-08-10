@@ -486,6 +486,40 @@ window.REGISTER_EXAM = function (e) {
   EXAMS.push(e);
 };
 
+/* ---------------------------------------------------------
+   Contenido local
+
+   data/local.js no está en el repositorio y no se sube nunca:
+   está en .gitignore. Sirve para el material que sale de libros
+   con derechos, que puedes tener en tu equipo pero no publicar.
+
+   Se carga si existe y se ignora en silencio si no, así que la
+   web pública funciona igual sin él.
+
+   Dentro se usa así:
+     REGISTER_LOCAL_EXAM(
+       { id:'trainer-1', file:null, paper:'…', title:'…',
+         parts:7, questions:52, minutes:75, focus:'…' },
+       { id:'trainer-1', paper:'…', parts:[ … ] }
+     );
+   --------------------------------------------------------- */
+window.REGISTER_LOCAL_EXAM = function (plan, exam) {
+  if (!plan || !exam || !plan.id) return;
+  plan.local = true;
+  for (var i = 0; i < EXAM_PLAN.length; i++) if (EXAM_PLAN[i].id === plan.id) { EXAM_PLAN[i] = plan; window.REGISTER_EXAM(exam); return; }
+  EXAM_PLAN.push(plan);
+  window.REGISTER_EXAM(exam);
+};
+
+function cargaContenidoLocal(cb) {
+  var s = document.createElement('script');
+  s.src = 'data/local.js';
+  s.async = false;
+  s.onload = function () { cb(true); };
+  s.onerror = function () { cb(false); };   /* no existe: es lo normal */
+  document.head.appendChild(s);
+}
+
 function examById(id) {
   for (var i = 0; i < EXAMS.length; i++) if (EXAMS[i].id === id) return EXAMS[i];
   return null;
@@ -3011,9 +3045,14 @@ function viewExams() {
     if (reg) for (var k in reg) if (reg.hasOwnProperty(k)) { hechas++; suma += reg[k].score || 0; }
     var media = hechas ? Math.round(suma / hechas) : null;
 
-    var card = el('button', 'examcard');
+    var card = el('button', 'examcard' + (p.local ? ' examcard--local' : ''));
     card.type = 'button';
-    card.appendChild(el('p', 'examcard__paper', p.paper));
+    var linea = el('p', 'examcard__paper', p.paper);
+    if (p.local) {
+      var tag = el('span', 'examcard__local', 'solo en este equipo');
+      linea.appendChild(tag);
+    }
+    card.appendChild(linea);
     card.appendChild(el('p', 'examcard__title', p.title));
     card.appendChild(el('p', 'examcard__meta',
       p.parts + ' partes · ' + p.questions + ' preguntas · ' + p.minutes + ' min en el examen real'));
@@ -3794,7 +3833,14 @@ if (!DAYS.length) {
   var session = Auth.current();
   if (session) openSession(session);
   else paintSession();
-  route();
+
+  /* Se intenta cargar el contenido local antes de pintar nada, para
+     que los simulacros de tus libros aparezcan en la misma lista.
+     Si no existe el archivo, se sigue igual. */
+  cargaContenidoLocal(function (hay) {
+    if (hay) console.info('[La Trampa] Contenido local cargado. No se publica: está en .gitignore.');
+    route();
+  });
 }
 
 })();
