@@ -430,33 +430,15 @@ input,textarea{font:inherit;color:inherit}
 .vault__text{font-size:.94rem;line-height:1.55;color:var(--muted);margin:0 0 1.1rem;max-width:60ch}
 .vault__form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:stretch}
 .vault__form .field__i{flex:1;min-width:12rem}
-.vault__remember{
-  display:flex;align-items:center;gap:.55rem;margin-top:.8rem;cursor:pointer;
-  font-family:var(--mono);font-size:.7rem;letter-spacing:.05em;color:var(--muted);
-}
-.vault__remember input{
-  appearance:none;-webkit-appearance:none;flex:none;
-  width:1rem;height:1rem;border:1px solid var(--line);border-radius:3px;
-  background:var(--panel);cursor:pointer;position:relative;
-}
-.vault__remember input:checked{background:var(--violet);border-color:var(--violet)}
-.vault__remember input:checked::after{
-  content:"";position:absolute;left:.28rem;top:.08rem;
-  width:.24rem;height:.5rem;border:solid var(--void);
-  border-width:0 2px 2px 0;transform:rotate(42deg);
-}
 .vault__msg{
   min-height:1.2rem;margin:.7rem 0 0;
   font-family:var(--mono);font-size:.74rem;color:transparent;
 }
 .vault__msg.is-bad{color:var(--coral)}
-.vault--open{
-  display:flex;flex-wrap:wrap;align-items:center;gap:.9rem 1.2rem;
-  padding:.9rem 1.1rem;margin-top:1.8rem;
-}
+.vault--open{padding:.9rem 1.1rem;margin-top:1.8rem}
 .vault__ok{
-  flex:1;min-width:16rem;margin:0;
-  font-family:var(--mono);font-size:.72rem;line-height:1.5;
+  margin:0;max-width:78ch;
+  font-family:var(--mono);font-size:.72rem;line-height:1.6;
   letter-spacing:.03em;color:var(--muted);
 }
 

@@ -278,6 +278,10 @@ function openSession(user) {
 }
 
 function closeSession() {
+  /* La clave del material se va con la sesión: si no, el siguiente
+     que entre en este navegador lo encontraría abierto. */
+  var saliendo = Auth.current();
+  if (saliendo) olvidaClave(saliendo.id);
   Auth.logout();
   KEY = null;
   memory = null;
@@ -547,13 +551,23 @@ window.REGISTER_LOCAL_EXAM = function (plan, exam) {
    Contenido cifrado
 
    data/vault.js sí está en el repositorio, pero dentro no hay
-   nada legible: es data/local.js cifrado con AES-256-CBC y una
-   clave derivada por PBKDF2 de una contraseña que no está en
-   ninguna parte del repositorio.
+   nada legible: es data/local.js cifrado con AES-256-CBC.
 
-   Se descifra en el navegador, en memoria, y solo si escribes
-   la contraseña. Sin ella no hay nada que leer, ni para un
-   buscador ni para quien tenga el enlace.
+   Va en sobre, no con una clave sola:
+
+     · el contenido se cifra UNA vez con una clave aleatoria de
+       256 bits (la clave de contenido), que no deriva de nada;
+     · esa clave se guarda envuelta una vez por usuario, cifrada
+       con lo que sale de aplicar PBKDF2 a SU contraseña de
+       acceso, la misma con la que entra en la web.
+
+   Así el material se abre solo al entrar, sin pedir una segunda
+   contraseña, y el repositorio sigue sin contener ninguna: de
+   data/users.js solo sale un hash, y de aquí solo ruido.
+
+   Todo lleva HMAC-SHA256 sobre iv+cifrado, que se verifica ANTES
+   de descifrar. Una contraseña mala falla limpio en vez de
+   devolver basura.
 
    Necesita crypto.subtle, que existe en https y en localhost
    pero no en file://. Abriendo index.html con doble clic el
@@ -563,12 +577,20 @@ window.REGISTER_LOCAL_EXAM = function (plan, exam) {
 var VAULT = null;
 window.REGISTER_VAULT = function (v) { VAULT = v; };
 
-var VAULT_KEY = 'latrampa.vault';   /* recuerda la contraseña en este equipo */
+/* Clave de contenido ya desenvuelta, para no volver a pasar por
+   PBKDF2 en cada recarga. Es por usuario y se borra al salir. */
+var CK_PREFIX = 'latrampa.ck.';
 
 function b64ToBytes(s) {
   var bin = atob(s), out = new Uint8Array(bin.length);
   for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
+}
+
+function bytesToB64(b) {
+  var s = '';
+  for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s);
 }
 
 function bytesEqual(a, b) {
@@ -578,40 +600,83 @@ function bytesEqual(a, b) {
   return d === 0;
 }
 
-/* Devuelve el JavaScript descifrado, o null si la contraseña no vale. */
-function abreVault(pass, cb) {
-  if (!VAULT || !window.crypto || !window.crypto.subtle) { cb(null, 'sin-cripto'); return; }
-  var C = window.crypto.subtle;
-  var enc = new TextEncoder();
+function hayCripto() { return !!(window.crypto && window.crypto.subtle); }
 
-  C.importKey('raw', enc.encode(pass), { name: 'PBKDF2' }, false, ['deriveBits'])
+/* Descifra un bloque {iv, mac, data} con 64 bytes de clave:
+   los 32 primeros cifran, los 32 siguientes firman. */
+function abreBloque(km, bloque) {
+  var C = window.crypto.subtle;
+  var kEnc = km.slice(0, 32), kMac = km.slice(32, 64);
+  var iv = b64ToBytes(bloque.iv), datos = b64ToBytes(bloque.data || bloque.wrapped);
+
+  var firmado = new Uint8Array(iv.length + datos.length);
+  firmado.set(iv, 0); firmado.set(datos, iv.length);
+
+  return C.importKey('raw', kMac, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    .then(function (mk) { return C.sign('HMAC', mk, firmado); })
+    .then(function (mac) {
+      if (!bytesEqual(new Uint8Array(mac), b64ToBytes(bloque.mac))) throw new Error('mac');
+      return C.importKey('raw', kEnc, { name: 'AES-CBC' }, false, ['decrypt']);
+    })
+    .then(function (ck) { return C.decrypt({ name: 'AES-CBC', iv: iv }, ck, datos); })
+    .then(function (plano) { return new Uint8Array(plano); });
+}
+
+/* Paso 1: de la contraseña de acceso a la clave de contenido. */
+function desenvuelveClave(user, pass, cb) {
+  if (!VAULT || !hayCripto()) { cb(null, 'sin-cripto'); return; }
+  var sobre = VAULT.keys && VAULT.keys[String(user).toLowerCase()];
+  if (!sobre) { cb(null, 'sin-acceso'); return; }
+
+  var C = window.crypto.subtle;
+  C.importKey('raw', new TextEncoder().encode(pass), { name: 'PBKDF2' }, false, ['deriveBits'])
     .then(function (base) {
       return C.deriveBits({
         name: 'PBKDF2',
-        salt: b64ToBytes(VAULT.kdf.salt),
-        iterations: VAULT.kdf.iterations,
-        hash: VAULT.kdf.hash
+        salt: b64ToBytes(sobre.kdf.salt),
+        iterations: sobre.kdf.iterations,
+        hash: sobre.kdf.hash
       }, base, 512);
     })
-    .then(function (bits) {
-      var km = new Uint8Array(bits);
-      var kEnc = km.slice(0, 32), kMac = km.slice(32, 64);
-      var iv = b64ToBytes(VAULT.iv), datos = b64ToBytes(VAULT.data);
-
-      /* se comprueba la firma ANTES de descifrar */
-      var firmado = new Uint8Array(iv.length + datos.length);
-      firmado.set(iv, 0); firmado.set(datos, iv.length);
-
-      return C.importKey('raw', kMac, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-        .then(function (mk) { return C.sign('HMAC', mk, firmado); })
-        .then(function (mac) {
-          if (!bytesEqual(new Uint8Array(mac), b64ToBytes(VAULT.mac))) throw new Error('mac');
-          return C.importKey('raw', kEnc, { name: 'AES-CBC' }, false, ['decrypt']);
-        })
-        .then(function (ck) { return C.decrypt({ name: 'AES-CBC', iv: iv }, ck, datos); })
-        .then(function (plano) { cb(new TextDecoder().decode(plano), null); });
-    })
+    .then(function (bits) { return abreBloque(new Uint8Array(bits), sobre); })
+    .then(function (km) { cb(km, null); })
     .catch(function (e) { cb(null, e && e.message === 'mac' ? 'contraseña' : 'error'); });
+}
+
+/* Paso 2: de la clave de contenido al JavaScript. */
+function descifraVault(km, cb) {
+  if (!VAULT || !hayCripto() || !km || km.length !== 64) { cb(null, 'error'); return; }
+  abreBloque(km, VAULT)
+    .then(function (plano) { cb(new TextDecoder().decode(plano), null); })
+    .catch(function () { cb(null, 'error'); });
+}
+
+/* Los dos pasos, desde la contraseña que se acaba de escribir.
+   La clave desenvuelta se recuerda; la contraseña no. */
+function abreVault(user, pass, cb) {
+  desenvuelveClave(user, pass, function (km, err) {
+    if (!km) { cb(false, err); return; }
+    descifraVault(km, function (js, err2) {
+      if (!js) { cb(false, err2); return; }
+      recuerdaClave(user, km);
+      ejecutaVault(js);
+      cb(true, null);
+    });
+  });
+}
+
+function recuerdaClave(user, km) {
+  try { window.localStorage.setItem(CK_PREFIX + String(user).toLowerCase(), bytesToB64(km)); } catch (e) {}
+}
+
+function olvidaClave(user) {
+  try { window.localStorage.removeItem(CK_PREFIX + String(user).toLowerCase()); } catch (e) {}
+}
+
+/* Se puede abrir el material sin volver a escribir nada. */
+function puedeAbrirVault(user) {
+  if (!VAULT || !hayCripto() || !user) return false;
+  return !!(VAULT.keys && VAULT.keys[String(user).toLowerCase()]);
 }
 
 function cargaContenidoLocal(cb) {
@@ -642,13 +707,21 @@ function cargaVault(cb) {
   document.head.appendChild(s);
 }
 
-/* Si ya escribiste la contraseña en este equipo, se reutiliza. */
+/* Al recargar la página no tenemos la contraseña, pero sí la clave
+   que se desenvolvió al entrar. Con ella no hace falta PBKDF2. */
 function abrirVaultGuardado(cb) {
+  var u = Auth.current();
+  if (!u) { cb(false); return; }
+
   var guardada = null;
-  try { guardada = window.localStorage.getItem(VAULT_KEY); } catch (e) {}
+  try { guardada = window.localStorage.getItem(CK_PREFIX + String(u.id).toLowerCase()); } catch (e) {}
   if (!guardada) { cb(false); return; }
-  abreVault(guardada, function (js) {
-    if (!js) { try { window.localStorage.removeItem(VAULT_KEY); } catch (e) {} cb(false); return; }
+
+  var km;
+  try { km = b64ToBytes(guardada); } catch (e) { olvidaClave(u.id); cb(false); return; }
+
+  descifraVault(km, function (js) {
+    if (!js) { olvidaClave(u.id); cb(false); return; }
     ejecutaVault(js);
     cb(true);
   });
@@ -3037,8 +3110,24 @@ function viewLogin(prefill) {
         return;
       }
 
-      openSession(r.user);
-      route();
+      /* El material privado se abre con esta misma contraseña, y este
+         es el único momento en que la tenemos delante: en cuanto
+         salgamos de aquí ya no existe en ninguna parte. Lo que se
+         guarda no es la contraseña, es la clave que desenvuelve. */
+      if (!puedeAbrirVault(r.user.id)) { passInput.value = ''; openSession(r.user); route(); return; }
+
+      go.disabled = true;
+      go.textContent = 'Abriendo tu material…';
+      abreVault(r.user.id, passInput.value, function (ok, err) {
+        passInput.value = '';
+        go.disabled = false;
+        go.textContent = 'Entrar';
+        if (!ok && err !== 'sin-cripto' && err !== 'sin-acceso') {
+          console.warn('[La Trampa] El material cifrado no se pudo abrir:', err);
+        }
+        openSession(r.user);
+        route();
+      });
     }, 30);
   });
 
@@ -3371,10 +3460,12 @@ function viewExams() {
   });
   v.appendChild(lista);
 
-  /* material cifrado: o se pide la contraseña, o se ofrece cerrarlo */
+  /* material cifrado: abierto se anuncia, cerrado se ofrece abrir */
   var hayLocal = EXAM_PLAN.some(function (p) { return p.local; });
-  if (VAULT && !hayLocal) v.appendChild(bloqueVault());
-  else if (VAULT && hayLocal) v.appendChild(bloqueVaultAbierto());
+  if (VAULT && hayLocal) v.appendChild(bloqueVaultAbierto());
+  else if (VAULT && (puedeAbrirVault(Auth.current() && Auth.current().id) || !hayCripto())) {
+    v.appendChild(bloqueVault());
+  }
 
   var row = el('div', 'btn-row');
   row.style.marginTop = '2rem';
@@ -3602,13 +3693,26 @@ function viewQuizHome() {
   mount(v);
 }
 
-/* Bloque para descifrar el material propio, si lo hay y sigue cerrado. */
+/* Respaldo: hay material cifrado, este usuario puede abrirlo, pero la
+   clave no está guardada. Pasa si entró antes de que existiera esto o
+   si se limpió el navegador. Se pide la contraseña de acceso, la misma
+   del login, no una segunda. */
 function bloqueVault() {
+  var u = Auth.current();
+
   var sec = el('section', 'vault');
   sec.appendChild(el('p', 'eyebrow', 'Material propio'));
-  sec.appendChild(el('p', 'vault__title', 'Tienes contenido cifrado en este sitio'));
+
+  if (!hayCripto()) {
+    sec.appendChild(el('p', 'vault__title', 'Tu material privado no se puede abrir aquí'));
+    sec.appendChild(el('p', 'vault__text',
+      'Descifrar necesita una conexión segura, y has abierto el archivo con doble clic. Entra por la dirección https del sitio y se abrirá solo.'));
+    return sec;
+  }
+
+  sec.appendChild(el('p', 'vault__title', 'Tu material privado está cerrado'));
   sec.appendChild(el('p', 'vault__text',
-    'Está guardado con AES-256 y una contraseña que no viaja en el repositorio. Escríbela y se descifra aquí, en tu navegador. Sin ella no hay nada legible, ni siquiera para quien tenga el enlace.'));
+    'Se abre con tu contraseña de acceso, la misma con la que has entrado. Normalmente pasa solo al entrar; si estás viendo esto, vuelve a escribirla una vez y se queda abierta.'));
 
   var form = document.createElement('form');
   form.className = 'vault__form';
@@ -3616,50 +3720,41 @@ function bloqueVault() {
 
   var inp = el('input', 'field__i');
   inp.type = 'password';
-  inp.placeholder = 'Contraseña del material';
-  inp.setAttribute('autocomplete', 'off');
-  inp.setAttribute('aria-label', 'Contraseña del material cifrado');
+  inp.placeholder = 'Tu contraseña de acceso';
+  inp.setAttribute('autocomplete', 'current-password');
+  inp.setAttribute('aria-label', 'Tu contraseña de acceso');
   form.appendChild(inp);
 
-  var go = el('button', 'btn btn--primary', 'Descifrar');
+  var go = el('button', 'btn btn--primary', 'Abrir');
   go.type = 'submit';
   form.appendChild(go);
   sec.appendChild(form);
 
-  var recordar = el('label', 'vault__remember');
-  var chk = el('input');
-  chk.type = 'checkbox';
-  chk.checked = true;
-  recordar.appendChild(chk);
-  recordar.appendChild(el('span', null, 'Recordarla en este dispositivo'));
-  sec.appendChild(recordar);
-
   var msg = el('p', 'vault__msg');
+  msg.setAttribute('role', 'alert');
   sec.appendChild(msg);
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     if (!inp.value) { inp.focus(); return; }
     go.disabled = true;
-    go.textContent = 'Descifrando…';
+    go.textContent = 'Abriendo…';
     msg.className = 'vault__msg';
     msg.textContent = '';
 
     setTimeout(function () {
-      abreVault(inp.value, function (js, err) {
+      abreVault(u ? u.id : '', inp.value, function (ok, err) {
         go.disabled = false;
-        go.textContent = 'Descifrar';
-        if (!js) {
+        go.textContent = 'Abrir';
+        if (!ok) {
           msg.className = 'vault__msg is-bad';
-          msg.textContent = err === 'sin-cripto'
-            ? 'Este navegador no puede descifrar aquí. Hace falta https, no vale abrir el archivo con doble clic.'
-            : 'La contraseña no es correcta.';
+          msg.textContent = err === 'sin-acceso'
+            ? 'Esta cuenta no tiene acceso al material privado.'
+            : 'Esa no es tu contraseña.';
           inp.value = '';
           inp.focus();
           return;
         }
-        if (chk.checked) { try { window.localStorage.setItem(VAULT_KEY, inp.value); } catch (e2) {} }
-        ejecutaVault(js);
         viewExams();
       });
     }, 30);
@@ -3668,22 +3763,11 @@ function bloqueVault() {
   return sec;
 }
 
-/* Cuando el material ya está descifrado: recordar que es privado y poder cerrarlo.
-   Si se guardó la contraseña, olvidarla aquí; si no, basta con recargar. */
+/* Cuando ya está abierto: dejar claro que eso no lo ve nadie más. */
 function bloqueVaultAbierto() {
-  var guardada = null;
-  try { guardada = window.localStorage.getItem(VAULT_KEY); } catch (e) {}
-
   var sec = el('section', 'vault vault--open');
   sec.appendChild(el('p', 'vault__ok',
-    'Material privado descifrado en este navegador. En el servidor sigue siendo ilegible.'));
-
-  var b = button(guardada ? 'Olvidar la contraseña en este dispositivo' : 'Cerrar el material',
-    'btn--ghost btn--sm', function () {
-      try { window.localStorage.removeItem(VAULT_KEY); } catch (e2) {}
-      window.location.reload();
-    });
-  sec.appendChild(b);
+    'Las pruebas de tus libros están cifradas en el repositorio y se han descifrado aquí, en tu navegador, con tu contraseña. Quien abra el enlace sin ella no ve nada de esto. Se cierran al pulsar Salir.'));
   return sec;
 }
 
