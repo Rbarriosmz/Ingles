@@ -50,6 +50,24 @@ var storageOK = (function () {
 var memory = null;          /* fallback cuando localStorage está bloqueado */
 var warnedStorage = false;
 
+/* Cuando al teléfono le falta espacio, el navegador borra los datos de
+   sitios enteros, empezando por los que menos se visitan. No avisa. Esto
+   pide quedar exento de esa limpieza; Chrome lo concede si el sitio está
+   en la pantalla de inicio o si entras a menudo. Es la única defensa que
+   una web sin servidor tiene contra ese borrado. */
+var PERSISTENTE = null;     /* null = sin respuesta todavía */
+
+function pideAlmacenamientoPersistente(cb) {
+  cb = cb || function () {};
+  if (!navigator.storage || !navigator.storage.persist) { PERSISTENTE = false; cb(false); return; }
+  try {
+    navigator.storage.persisted().then(function (ya) {
+      if (ya) { PERSISTENTE = true; cb(true); return; }
+      return navigator.storage.persist().then(function (ok) { PERSISTENTE = !!ok; cb(!!ok); });
+    }).catch(function () { PERSISTENTE = false; cb(false); });
+  } catch (e) { PERSISTENTE = false; cb(false); }
+}
+
 function normalizeState(raw) {
   var s = {};
   raw = (raw && typeof raw === 'object') ? raw : {};
@@ -218,6 +236,95 @@ function importProgress(file, done) {
   };
   reader.onerror = function () { done('No se pudo leer el archivo.'); };
   reader.readAsText(file);
+}
+
+/* ---------- código de progreso ----------
+
+   En el móvil, descargar un archivo y volver a subirlo es un suplicio:
+   hay que encontrarlo en Descargas, el selector no siempre lo ofrece y
+   media hora después nadie sabe dónde está. Un código que se copia y se
+   pega en un mensaje a uno mismo viaja mucho mejor, y sirve igual para
+   pasar el progreso de un teléfono al ordenador.
+
+   Formato:  LT1:<base64>   texto plano
+             LT1Z:<base64>  comprimido con gzip (unas cuatro veces más corto)
+   ---------------------------------------------------------- */
+
+function comprime(txt, cb) {
+  if (!window.CompressionStream) { cb(null); return; }
+  try {
+    var cs = new window.CompressionStream('gzip');
+    var w = cs.writable.getWriter();
+    /* el escritor rechaza aparte del lector cuando el flujo falla:
+       sin estos catch queda un error suelto en la consola */
+    w.write(new TextEncoder().encode(txt))['catch'](function () {});
+    w.close()['catch'](function () {});
+    new Response(cs.readable).arrayBuffer()
+      .then(function (buf) { cb(new Uint8Array(buf)); })
+      .catch(function () { cb(null); });
+  } catch (e) { cb(null); }
+}
+
+/* Distingue las dos formas de fallar: que el navegador no sepa, o que el
+   código llegue cortado. Confundirlas manda al usuario a buscar donde no es. */
+function descomprime(bytes, cb) {
+  if (!window.DecompressionStream) { cb(null, 'sin-soporte'); return; }
+  try {
+    var ds = new window.DecompressionStream('gzip');
+    var w = ds.writable.getWriter();
+    w.write(bytes)['catch'](function () {});
+    w.close()['catch'](function () {});
+    new Response(ds.readable).arrayBuffer()
+      .then(function (buf) { cb(new TextDecoder().decode(buf), null); })
+      .catch(function () { cb(null, 'roto'); });
+  } catch (e) { cb(null, 'roto'); }
+}
+
+function codigoDeProgreso(cb) {
+  var user = Auth.current();
+  var json = JSON.stringify({ a: 'la-trampa', s: SCHEMA, u: user ? user.id : null, p: S });
+  comprime(json, function (bytes) {
+    if (bytes) { cb('LT1Z:' + bytesToB64(bytes)); return; }
+    /* sin gzip: base64 del texto en UTF-8, que btoa por sí solo no traga */
+    cb('LT1:' + bytesToB64(new TextEncoder().encode(json)));
+  });
+}
+
+function aplicaCodigoDeProgreso(txt, cb) {
+  txt = String(txt || '').replace(/\s+/g, '');
+  var m = /^LT1(Z?):(.+)$/i.exec(txt);
+  if (!m) { cb('Ese no es un código de La Trampa. Tiene que empezar por LT1.'); return; }
+
+  var bytes;
+  try { bytes = b64ToBytes(m[2]); }
+  catch (e) { cb('El código está incompleto o le falta un trozo al copiarlo.'); return; }
+
+  function conJson(json) {
+    var data;
+    try { data = JSON.parse(json); }
+    catch (e) { cb('El código está incompleto o le falta un trozo al copiarlo.'); return; }
+    var prog = data && (data.p || data.progress || data);
+    if (!prog || typeof prog !== 'object' || !prog.done) { cb('El código no contiene ningún progreso.'); return; }
+
+    var antes = doneCount();
+    S = mergeState(S, prog);
+    commit();
+    cb(null, { dias: doneCount(), nuevos: doneCount() - antes, de: (data && data.u) || 'otra cuenta' });
+  }
+
+  if (m[1]) {
+    descomprime(bytes, function (json, err) {
+      if (!json) {
+        cb(err === 'sin-soporte'
+          ? 'Este navegador no sabe leer códigos comprimidos. Usa «Guardar copia» en su lugar.'
+          : 'El código está incompleto: al copiarlo se ha quedado un trozo fuera. Cópialo entero.');
+        return;
+      }
+      conJson(json);
+    });
+  } else {
+    conJson(new TextDecoder().decode(bytes));
+  }
 }
 
 function loadState() {
@@ -3308,12 +3415,79 @@ function bloqueDatos() {
   sec.appendChild(el('p', 'eyebrow', 'Tus datos'));
 
   var texto = el('p', 'muted');
-  texto.style.maxWidth = '52ch';
+  texto.style.maxWidth = '56ch';
   texto.style.marginBottom = '1rem';
-  texto.textContent = 'El progreso se guarda en este navegador. Actualizar la web no lo borra, pero limpiar los datos del navegador sí. Guarda una copia si quieres llevártelo a otro dispositivo.';
+  texto.textContent = 'El progreso se guarda en este navegador, no en ningún servidor. Actualizar la web no lo borra. Sí lo borran: limpiar los datos del navegador, una app de limpieza, o abrir la web desde dentro de otra aplicación en lugar de desde el navegador.';
   sec.appendChild(texto);
 
   var msg = el('p', 'datos__msg');
+
+  /* ---- estado real del almacenamiento en este dispositivo ---- */
+  var estado = el('p', 'datos__estado');
+  function pintaEstado() {
+    if (!storageOK) {
+      estado.className = 'datos__estado is-bad';
+      estado.textContent = 'Este navegador no deja guardar nada. El progreso durará hasta que cierres la pestaña. Suele pasar en modo incógnito.';
+    } else if (PERSISTENTE === true) {
+      estado.className = 'datos__estado is-ok';
+      estado.textContent = 'Almacenamiento protegido: el navegador no borrará tu progreso aunque le falte espacio.';
+    } else {
+      estado.className = 'datos__estado is-warn';
+      estado.textContent = 'Almacenamiento sin proteger: si al dispositivo le falta espacio, el navegador puede borrar tu progreso sin avisar. Añade la web a la pantalla de inicio y ábrela siempre desde ahí; entonces queda protegida.';
+    }
+  }
+  pintaEstado();
+  if (PERSISTENTE === null) pideAlmacenamientoPersistente(function () { pintaEstado(); });
+  sec.appendChild(estado);
+
+  /* ---- código de progreso: lo práctico en el móvil ---- */
+  var caja = el('div', 'codigo');
+  caja.appendChild(el('p', 'codigo__t', 'Código de progreso'));
+  caja.appendChild(el('p', 'codigo__d',
+    'Un texto que resume todo lo que llevas hecho. Cópialo y mándatelo por mensaje: con él recuperas el progreso en este teléfono o lo pasas a otro. Pegar un código aquí no borra nada, se queda con lo mejor de los dos.'));
+
+  var area = el('textarea', 'codigo__i');
+  area.rows = 3;
+  area.setAttribute('spellcheck', 'false');
+  area.setAttribute('autocapitalize', 'off');
+  area.setAttribute('autocorrect', 'off');
+  area.placeholder = 'Aquí aparecerá tu código, o pega uno para restaurar.';
+  caja.appendChild(area);
+
+  var fila = el('div', 'btn-row');
+  fila.appendChild(button('Generar mi código', 'btn--primary btn--sm', function () {
+    codigoDeProgreso(function (c) {
+      area.value = c;
+      area.focus();
+      area.select();
+      var copiado = false;
+      try { copiado = document.execCommand('copy'); } catch (e) {}
+      if (!copiado && navigator.clipboard) {
+        navigator.clipboard.writeText(c).then(function () {
+          msg.className = 'datos__msg is-ok';
+          msg.textContent = 'Código copiado. Pégalo en un mensaje y guárdalo.';
+        }, function () {});
+      }
+      msg.className = 'datos__msg is-ok';
+      msg.textContent = copiado
+        ? 'Código copiado. Pégalo en un mensaje y guárdalo.'
+        : 'Ahí tienes tu código. Cópialo entero y guárdalo en un mensaje.';
+    });
+  }));
+
+  fila.appendChild(button('Restaurar desde el código', 'btn--ghost btn--sm', function () {
+    if (!area.value.trim()) { area.focus(); return; }
+    aplicaCodigoDeProgreso(area.value, function (err, res) {
+      if (err) { msg.className = 'datos__msg is-bad'; msg.textContent = err; return; }
+      msg.className = 'datos__msg is-ok';
+      msg.textContent = 'Restaurado: ahora tienes ' + res.dias + ' días hechos' +
+        (res.nuevos > 0 ? ' (' + res.nuevos + ' nuevos desde el código).' : '. No había nada nuevo que añadir.');
+      area.value = '';
+      setTimeout(function () { viewMap(); }, 1800);
+    });
+  }));
+  caja.appendChild(fila);
+  sec.appendChild(caja);
 
   var row = el('div', 'btn-row');
   row.appendChild(button('Guardar copia', 'btn--ghost', function () {
@@ -4582,6 +4756,10 @@ if (!DAYS.length) {
      carga después que este archivo: si pintáramos ya, el banco de
      preguntas todavía estaría vacío. */
   arrancaCuandoTodoEsté(function () {
+    /* Cuanto antes se pida, antes queda el progreso a salvo de que el
+       navegador limpie por falta de espacio. No bloquea nada. */
+    pideAlmacenamientoPersistente();
+
     var session = Auth.current();
     if (session) openSession(session);
     else paintSession();

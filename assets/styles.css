@@ -612,6 +612,39 @@ input,textarea{font:inherit;color:inherit}
 .datos__msg.is-ok{color:var(--mint)}
 .datos__msg.is-bad{color:var(--coral)}
 
+/* estado del almacenamiento: lo lee de un vistazo quien no sabe que es
+   localStorage, asi que el color hace la mitad del trabajo */
+.datos__estado{
+  margin:0 0 1.2rem;padding:.7rem .9rem;max-width:60ch;
+  border-left:3px solid var(--line);border-radius:0 var(--r-s) var(--r-s) 0;
+  background:var(--panel);
+  font-family:var(--mono);font-size:.72rem;line-height:1.55;color:var(--muted);
+}
+.datos__estado.is-ok{border-left-color:var(--mint)}
+.datos__estado.is-warn{border-left-color:var(--marigold)}
+.datos__estado.is-bad{border-left-color:var(--coral)}
+
+.codigo{
+  margin:0 0 1.4rem;padding:1rem 1.1rem;
+  border:1px solid var(--line);border-radius:var(--r-m);
+  background:var(--panel);
+}
+.codigo__t{
+  margin:0 0 .4rem;font-family:var(--display);font-weight:600;
+  font-size:1rem;letter-spacing:-.01em;
+}
+.codigo__d{margin:0 0 .9rem;max-width:58ch;font-size:.88rem;line-height:1.55;color:var(--muted)}
+.codigo__i{
+  display:block;width:100%;box-sizing:border-box;margin:0 0 .9rem;
+  padding:.6rem .7rem;resize:vertical;
+  border:1px solid var(--line);border-radius:var(--r-s);
+  background:var(--void);color:var(--chalk);
+  font-family:var(--mono);font-size:.7rem;line-height:1.5;
+  word-break:break-all;
+}
+.codigo__i:focus{outline:none;border-color:var(--marigold);background:rgba(233,165,38,.06)}
+.codigo__i:focus-visible{outline:2px solid var(--marigold);outline-offset:2px}
+
 /* ---------- pantalla de acceso ---------- */
 
 .login{
