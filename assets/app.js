@@ -305,6 +305,22 @@ function esc(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/* Texto de las explicaciones. Se escapa todo y despues se devuelven a la vida
+   solo cuatro etiquetas de enfasis, mas **negrita** y _cursiva_ al estilo
+   markdown. Cualquier otra cosa que venga en los datos sigue siendo texto:
+   no hay forma de colar html desde un archivo de data/. */
+var TAGS_OK = 'code|em|strong|b|i';
+var RE_ABRE  = new RegExp('&lt;(' + TAGS_OK + ')&gt;', 'g');
+var RE_CIERRA = new RegExp('&lt;\\/(' + TAGS_OK + ')&gt;', 'g');
+
+function rich(s) {
+  return esc(s)
+    .replace(RE_ABRE, '<$1>')
+    .replace(RE_CIERRA, '</$1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/_(.+?)_/g, '<em>$1</em>');
+}
+
 function frag() { return document.createDocumentFragment(); }
 
 function isArr(x) { return Object.prototype.toString.call(x) === '[object Array]'; }
@@ -527,19 +543,127 @@ window.REGISTER_LOCAL_EXAM = function (plan, exam) {
   window.REGISTER_EXAM(exam);
 };
 
+/* ---------------------------------------------------------
+   Contenido cifrado
+
+   data/vault.js sí está en el repositorio, pero dentro no hay
+   nada legible: es data/local.js cifrado con AES-256-CBC y una
+   clave derivada por PBKDF2 de una contraseña que no está en
+   ninguna parte del repositorio.
+
+   Se descifra en el navegador, en memoria, y solo si escribes
+   la contraseña. Sin ella no hay nada que leer, ni para un
+   buscador ni para quien tenga el enlace.
+
+   Necesita crypto.subtle, que existe en https y en localhost
+   pero no en file://. Abriendo index.html con doble clic el
+   material cifrado no se carga, y la web funciona igual.
+   --------------------------------------------------------- */
+
+var VAULT = null;
+window.REGISTER_VAULT = function (v) { VAULT = v; };
+
+var VAULT_KEY = 'latrampa.vault';   /* recuerda la contraseña en este equipo */
+
+function b64ToBytes(s) {
+  var bin = atob(s), out = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  var d = 0;
+  for (var i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
+/* Devuelve el JavaScript descifrado, o null si la contraseña no vale. */
+function abreVault(pass, cb) {
+  if (!VAULT || !window.crypto || !window.crypto.subtle) { cb(null, 'sin-cripto'); return; }
+  var C = window.crypto.subtle;
+  var enc = new TextEncoder();
+
+  C.importKey('raw', enc.encode(pass), { name: 'PBKDF2' }, false, ['deriveBits'])
+    .then(function (base) {
+      return C.deriveBits({
+        name: 'PBKDF2',
+        salt: b64ToBytes(VAULT.kdf.salt),
+        iterations: VAULT.kdf.iterations,
+        hash: VAULT.kdf.hash
+      }, base, 512);
+    })
+    .then(function (bits) {
+      var km = new Uint8Array(bits);
+      var kEnc = km.slice(0, 32), kMac = km.slice(32, 64);
+      var iv = b64ToBytes(VAULT.iv), datos = b64ToBytes(VAULT.data);
+
+      /* se comprueba la firma ANTES de descifrar */
+      var firmado = new Uint8Array(iv.length + datos.length);
+      firmado.set(iv, 0); firmado.set(datos, iv.length);
+
+      return C.importKey('raw', kMac, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+        .then(function (mk) { return C.sign('HMAC', mk, firmado); })
+        .then(function (mac) {
+          if (!bytesEqual(new Uint8Array(mac), b64ToBytes(VAULT.mac))) throw new Error('mac');
+          return C.importKey('raw', kEnc, { name: 'AES-CBC' }, false, ['decrypt']);
+        })
+        .then(function (ck) { return C.decrypt({ name: 'AES-CBC', iv: iv }, ck, datos); })
+        .then(function (plano) { cb(new TextDecoder().decode(plano), null); });
+    })
+    .catch(function (e) { cb(null, e && e.message === 'mac' ? 'contraseña' : 'error'); });
+}
+
 function cargaContenidoLocal(cb) {
   /* En el sitio publicado este archivo no existe y no puede existir,
      así que ni se pide: solo dejaría un 404 en la consola. Se busca
      en cualquier otro sitio, incluido un servidor de tu red local
      para usarlo desde la tablet. */
-  if (/\.github\.io$/i.test(location.hostname)) { cb(false); return; }
+  /* En local, data/local.js va en claro y se carga tal cual. */
+  if (!/\.github\.io$/i.test(location.hostname)) {
+    var s = document.createElement('script');
+    s.src = 'data/local.js';
+    s.async = false;
+    s.onload = function () { cb(true); };
+    s.onerror = function () { cargaVault(cb); };
+    document.head.appendChild(s);
+    return;
+  }
+  /* En el sitio publicado solo puede haber material cifrado. */
+  cargaVault(cb);
+}
 
+function cargaVault(cb) {
   var s = document.createElement('script');
-  s.src = 'data/local.js';
+  s.src = 'data/vault.js';
   s.async = false;
-  s.onload = function () { cb(true); };
-  s.onerror = function () { cb(false); };   /* no existe: es lo normal */
+  s.onload = function () { abrirVaultGuardado(cb); };
+  s.onerror = function () { cb(false); };   /* no hay material cifrado */
   document.head.appendChild(s);
+}
+
+/* Si ya escribiste la contraseña en este equipo, se reutiliza. */
+function abrirVaultGuardado(cb) {
+  var guardada = null;
+  try { guardada = window.localStorage.getItem(VAULT_KEY); } catch (e) {}
+  if (!guardada) { cb(false); return; }
+  abreVault(guardada, function (js) {
+    if (!js) { try { window.localStorage.removeItem(VAULT_KEY); } catch (e) {} cb(false); return; }
+    ejecutaVault(js);
+    cb(true);
+  });
+}
+
+function ejecutaVault(js) {
+  try {
+    /* El contenido descifrado vive solo en memoria: se ejecuta y
+       se descarta. No se escribe en disco ni en localStorage. */
+    (new Function(js))();
+    return true;
+  } catch (e) {
+    console.warn('[La Trampa] El contenido descifrado no se pudo cargar:', e);
+    return false;
+  }
 }
 
 function examById(id) {
@@ -929,9 +1053,7 @@ function trapPanel(opts) {
 
   if (opts.why) {
     var why = el('p', 'trap__why');
-    why.innerHTML = esc(opts.why)
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/_(.+?)_/g, '<em>$1</em>');
+    why.innerHTML = rich(opts.why);
     wrap.appendChild(why);
   }
 
@@ -2384,7 +2506,7 @@ RENDER.gappedtext = function (ex, ctx) {
         if (ex.extraWhy) {
           var w = el('p', 'muted');
           w.style.marginTop = '.6rem';
-          w.innerHTML = esc(ex.extraWhy).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/_(.+?)_/g, '<em>$1</em>');
+          w.innerHTML = rich(ex.extraWhy);
           n.appendChild(w);
         }
         zone.appendChild(n);
@@ -3230,7 +3352,7 @@ function viewExams() {
     card.type = 'button';
     var linea = el('p', 'examcard__paper', p.paper);
     if (p.local) {
-      var tag = el('span', 'examcard__local', 'solo en este equipo');
+      var tag = el('span', 'examcard__local', 'material privado');
       linea.appendChild(tag);
     }
     card.appendChild(linea);
@@ -3248,6 +3370,11 @@ function viewExams() {
     lista.appendChild(card);
   });
   v.appendChild(lista);
+
+  /* material cifrado: o se pide la contraseña, o se ofrece cerrarlo */
+  var hayLocal = EXAM_PLAN.some(function (p) { return p.local; });
+  if (VAULT && !hayLocal) v.appendChild(bloqueVault());
+  else if (VAULT && hayLocal) v.appendChild(bloqueVaultAbierto());
 
   var row = el('div', 'btn-row');
   row.style.marginTop = '2rem';
@@ -3475,6 +3602,91 @@ function viewQuizHome() {
   mount(v);
 }
 
+/* Bloque para descifrar el material propio, si lo hay y sigue cerrado. */
+function bloqueVault() {
+  var sec = el('section', 'vault');
+  sec.appendChild(el('p', 'eyebrow', 'Material propio'));
+  sec.appendChild(el('p', 'vault__title', 'Tienes contenido cifrado en este sitio'));
+  sec.appendChild(el('p', 'vault__text',
+    'Está guardado con AES-256 y una contraseña que no viaja en el repositorio. Escríbela y se descifra aquí, en tu navegador. Sin ella no hay nada legible, ni siquiera para quien tenga el enlace.'));
+
+  var form = document.createElement('form');
+  form.className = 'vault__form';
+  form.setAttribute('novalidate', 'novalidate');
+
+  var inp = el('input', 'field__i');
+  inp.type = 'password';
+  inp.placeholder = 'Contraseña del material';
+  inp.setAttribute('autocomplete', 'off');
+  inp.setAttribute('aria-label', 'Contraseña del material cifrado');
+  form.appendChild(inp);
+
+  var go = el('button', 'btn btn--primary', 'Descifrar');
+  go.type = 'submit';
+  form.appendChild(go);
+  sec.appendChild(form);
+
+  var recordar = el('label', 'vault__remember');
+  var chk = el('input');
+  chk.type = 'checkbox';
+  chk.checked = true;
+  recordar.appendChild(chk);
+  recordar.appendChild(el('span', null, 'Recordarla en este dispositivo'));
+  sec.appendChild(recordar);
+
+  var msg = el('p', 'vault__msg');
+  sec.appendChild(msg);
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!inp.value) { inp.focus(); return; }
+    go.disabled = true;
+    go.textContent = 'Descifrando…';
+    msg.className = 'vault__msg';
+    msg.textContent = '';
+
+    setTimeout(function () {
+      abreVault(inp.value, function (js, err) {
+        go.disabled = false;
+        go.textContent = 'Descifrar';
+        if (!js) {
+          msg.className = 'vault__msg is-bad';
+          msg.textContent = err === 'sin-cripto'
+            ? 'Este navegador no puede descifrar aquí. Hace falta https, no vale abrir el archivo con doble clic.'
+            : 'La contraseña no es correcta.';
+          inp.value = '';
+          inp.focus();
+          return;
+        }
+        if (chk.checked) { try { window.localStorage.setItem(VAULT_KEY, inp.value); } catch (e2) {} }
+        ejecutaVault(js);
+        viewExams();
+      });
+    }, 30);
+  });
+
+  return sec;
+}
+
+/* Cuando el material ya está descifrado: recordar que es privado y poder cerrarlo.
+   Si se guardó la contraseña, olvidarla aquí; si no, basta con recargar. */
+function bloqueVaultAbierto() {
+  var guardada = null;
+  try { guardada = window.localStorage.getItem(VAULT_KEY); } catch (e) {}
+
+  var sec = el('section', 'vault vault--open');
+  sec.appendChild(el('p', 'vault__ok',
+    'Material privado descifrado en este navegador. En el servidor sigue siendo ilegible.'));
+
+  var b = button(guardada ? 'Olvidar la contraseña en este dispositivo' : 'Cerrar el material',
+    'btn--ghost btn--sm', function () {
+      try { window.localStorage.removeItem(VAULT_KEY); } catch (e2) {}
+      window.location.reload();
+    });
+  sec.appendChild(b);
+  return sec;
+}
+
 function quizCard(t, esMezcla) {
   var best = quizBest(t.tag);
   var c = el('button', 'quizcard' + (esMezcla ? ' quizcard--all' : ''));
@@ -3678,7 +3890,7 @@ function finishQuiz() {
       var d = el('div');
       d.appendChild(el('div', null, f.q + (f.agotado ? ' (sin responder)' : '')));
       var c = el('div', 'quiz__fix');
-      c.innerHTML = '<b>' + esc(f.correcta) + '</b>' + (f.why ? ' — ' + f.why : '');
+      c.innerHTML = '<b>' + esc(f.correcta) + '</b>' + (f.why ? ' — ' + rich(f.why) : '');
       d.appendChild(c);
       li.appendChild(d);
       ul.appendChild(li);

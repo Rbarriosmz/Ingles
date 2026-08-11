@@ -416,6 +416,50 @@ input,textarea{font:inherit;color:inherit}
 .weakrow__foot{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 .weakrow__meta{font-family:var(--mono);font-size:.68rem;letter-spacing:.04em;color:var(--muted)}
 
+/* ---------- material cifrado ---------- */
+
+.vault{
+  margin-top:2.4rem;padding:1.3rem 1.4rem;
+  border:1px solid rgba(167,139,250,.4);
+  border-left:3px solid var(--violet);
+  border-radius:var(--r-m);
+  background:rgba(167,139,250,.07);
+}
+.vault .eyebrow{color:var(--violet)}
+.vault__title{font-family:var(--display);font-weight:600;font-size:1.15rem;letter-spacing:-.02em;margin:0 0 .5rem}
+.vault__text{font-size:.94rem;line-height:1.55;color:var(--muted);margin:0 0 1.1rem;max-width:60ch}
+.vault__form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:stretch}
+.vault__form .field__i{flex:1;min-width:12rem}
+.vault__remember{
+  display:flex;align-items:center;gap:.55rem;margin-top:.8rem;cursor:pointer;
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.05em;color:var(--muted);
+}
+.vault__remember input{
+  appearance:none;-webkit-appearance:none;flex:none;
+  width:1rem;height:1rem;border:1px solid var(--line);border-radius:3px;
+  background:var(--panel);cursor:pointer;position:relative;
+}
+.vault__remember input:checked{background:var(--violet);border-color:var(--violet)}
+.vault__remember input:checked::after{
+  content:"";position:absolute;left:.28rem;top:.08rem;
+  width:.24rem;height:.5rem;border:solid var(--void);
+  border-width:0 2px 2px 0;transform:rotate(42deg);
+}
+.vault__msg{
+  min-height:1.2rem;margin:.7rem 0 0;
+  font-family:var(--mono);font-size:.74rem;color:transparent;
+}
+.vault__msg.is-bad{color:var(--coral)}
+.vault--open{
+  display:flex;flex-wrap:wrap;align-items:center;gap:.9rem 1.2rem;
+  padding:.9rem 1.1rem;margin-top:1.8rem;
+}
+.vault__ok{
+  flex:1;min-width:16rem;margin:0;
+  font-family:var(--mono);font-size:.72rem;line-height:1.5;
+  letter-spacing:.03em;color:var(--muted);
+}
+
 /* ---------- simulacros ---------- */
 
 .exams{
