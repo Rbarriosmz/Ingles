@@ -645,6 +645,21 @@ input,textarea{font:inherit;color:inherit}
 .codigo__i:focus{outline:none;border-color:var(--marigold);background:rgba(233,165,38,.06)}
 .codigo__i:focus-visible{outline:2px solid var(--marigold);outline-offset:2px}
 
+/* aviso de navegador incrustado: sale arriba del mapa porque avisar
+   despues de perder el progreso no le sirve a nadie */
+.aviso-wv{
+  margin:0 0 2rem;padding:1.1rem 1.2rem;
+  border:1px solid rgba(232,101,74,.45);
+  border-left:3px solid var(--coral);
+  border-radius:var(--r-m);
+  background:rgba(232,101,74,.07);
+}
+.aviso-wv__t{
+  margin:0 0 .5rem;font-family:var(--display);font-weight:600;
+  font-size:1.02rem;letter-spacing:-.01em;color:var(--chalk);
+}
+.aviso-wv__d{margin:0 0 1rem;max-width:62ch;font-size:.92rem;line-height:1.55;color:var(--muted)}
+
 /* ---------- pantalla de acceso ---------- */
 
 .login{

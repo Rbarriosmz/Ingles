@@ -57,6 +57,38 @@ var warnedStorage = false;
    una web sin servidor tiene contra ese borrado. */
 var PERSISTENTE = null;     /* null = sin respuesta todavía */
 
+/* Desde dónde se está abriendo la web.
+
+   Esto importa más de lo que parece. Cuando abres un enlace dentro de
+   WhatsApp, Instagram o Gmail, Android no lo manda a Chrome: lo abre en
+   un navegador incrustado en esa app, que tiene SU PROPIO almacén. Así
+   que el progreso de "la web abierta desde el chat" y el de "la web
+   abierta desde Chrome" son dos cajones distintos, y quien va saltando
+   entre uno y otro jura que se le borra el progreso solo.
+
+   El navegador incrustado de Android se delata con «; wv)» en el
+   userAgent. Facebook e Instagram, además, ponen su propia marca. */
+function avisoIncrustadoVisto() {
+  try { return window.localStorage.getItem('latrampa.avisowv') === '1'; } catch (e) { return false; }
+}
+
+function contextoDelNavegador() {
+  var ua = String(navigator.userAgent || '');
+  var incrustado = /;\s*wv\)/i.test(ua) || /FBAN|FBAV|FB_IAB|Instagram|MicroMessenger|Line\//i.test(ua);
+  var instalada = false;
+  try {
+    instalada = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+                window.navigator.standalone === true;
+  } catch (e) {}
+  return {
+    incrustado: incrustado && !instalada,
+    instalada: instalada,
+    nombre: instalada ? 'la web instalada en la pantalla de inicio'
+          : incrustado ? 'el navegador interno de otra aplicación'
+          : 'el navegador normal'
+  };
+}
+
 function pideAlmacenamientoPersistente(cb) {
   cb = cb || function () {};
   if (!navigator.storage || !navigator.storage.persist) { PERSISTENTE = false; cb(false); return; }
@@ -3250,6 +3282,26 @@ function viewLogin(prefill) {
 function viewMap() {
   var v = view('map');
 
+  /* Si se ha entrado por el navegador incrustado de otra app, el progreso
+     de hoy va a un cajón distinto del de siempre. Avisar después no sirve
+     de nada, así que va arriba del todo y se puede cerrar. */
+  var ctx = contextoDelNavegador();
+  if (ctx.incrustado && !avisoIncrustadoVisto()) {
+    var av = el('div', 'aviso-wv');
+    av.setAttribute('role', 'alert');
+    av.appendChild(el('p', 'aviso-wv__t', 'Has abierto la web dentro de otra aplicación'));
+    av.appendChild(el('p', 'aviso-wv__d',
+      'Al abrir el enlace desde un chat, Android usa un navegador interno que guarda el progreso aparte del navegador normal, y a veces lo borra al cerrar la app. ' +
+      'Ábrela en Chrome y añádela a la pantalla de inicio: entonces siempre entrarás al mismo sitio.'));
+    var fila = el('div', 'btn-row');
+    fila.appendChild(button('Entendido, no avisar más', 'btn--ghost btn--sm', function () {
+      try { window.localStorage.setItem('latrampa.avisowv', '1'); } catch (e) {}
+      av.parentNode.removeChild(av);
+    }));
+    av.appendChild(fila);
+    v.appendChild(av);
+  }
+
   var head = el('div', 'map__head');
   var left = el('div');
   left.appendChild(el('p', 'eyebrow', 'Programa de 60 días'));
@@ -3422,18 +3474,42 @@ function bloqueDatos() {
 
   var msg = el('p', 'datos__msg');
 
-  /* ---- estado real del almacenamiento en este dispositivo ---- */
+  /* ---- de dónde viene y qué hay guardado aquí ----
+     Sirve para dejar de adivinar: dice en qué cajón estás y cuánto hay
+     dentro, que es justo lo que hace falta cuando alguien dice que ha
+     perdido el progreso. */
+  var ctx = contextoDelNavegador();
+
+  var donde = el('p', 'datos__estado');
+  if (ctx.incrustado) {
+    donde.className = 'datos__estado is-bad';
+    donde.textContent = 'Has entrado desde ' + ctx.nombre + ' (has abierto el enlace dentro de WhatsApp, Instagram o similar). ' +
+      'Ese navegador guarda el progreso en un sitio aparte del navegador normal, y algunos lo borran al cerrar la app. ' +
+      'Por eso puede parecer que el progreso va y viene. Abre la web en Chrome y añádela a la pantalla de inicio.';
+  } else {
+    donde.className = 'datos__estado ' + (ctx.instalada ? 'is-ok' : '');
+    donde.textContent = 'Has entrado desde ' + ctx.nombre + '.' +
+      (ctx.instalada ? ' Es la mejor forma: siempre el mismo sitio y con el progreso protegido.'
+                     : ' Ábrela siempre igual: cada navegador guarda su propio progreso.');
+  }
+  sec.appendChild(donde);
+
   var estado = el('p', 'datos__estado');
   function pintaEstado() {
+    var u = Auth.current();
+    var cuanto = doneCount() + ' días, ' + (S.xp || 0) + ' XP';
     if (!storageOK) {
       estado.className = 'datos__estado is-bad';
-      estado.textContent = 'Este navegador no deja guardar nada. El progreso durará hasta que cierres la pestaña. Suele pasar en modo incógnito.';
+      estado.textContent = 'Este navegador no deja guardar nada. Lo que hagas durará hasta que cierres la pestaña. Suele pasar en modo incógnito.';
     } else if (PERSISTENTE === true) {
       estado.className = 'datos__estado is-ok';
-      estado.textContent = 'Almacenamiento protegido: el navegador no borrará tu progreso aunque le falte espacio.';
+      estado.textContent = 'En este cajón hay ' + cuanto + ' de ' + (u ? u.id : 'esta cuenta') +
+        '. Almacenamiento protegido: el navegador no lo borrará aunque le falte espacio.';
     } else {
       estado.className = 'datos__estado is-warn';
-      estado.textContent = 'Almacenamiento sin proteger: si al dispositivo le falta espacio, el navegador puede borrar tu progreso sin avisar. Añade la web a la pantalla de inicio y ábrela siempre desde ahí; entonces queda protegida.';
+      estado.textContent = 'En este cajón hay ' + cuanto + ' de ' + (u ? u.id : 'esta cuenta') +
+        '. Almacenamiento sin proteger: si al dispositivo le falta espacio, el navegador puede borrarlo sin avisar. ' +
+        'Añade la web a la pantalla de inicio y ábrela desde ahí; entonces queda protegida.';
     }
   }
   pintaEstado();
